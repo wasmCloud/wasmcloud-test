@@ -2,6 +2,12 @@
 name = "wasmcloud-test-util"
 version = "0.1.0"
 edition = "2018"
+authors = [ "wasmcloud Team" ]
+license = "Apache-2.0"
+description = "Test tools and utilities for wasmcloud"
+homepage = "https://github.com/wasmcloud/wasmcloud"
+repository = "https://github.com/wasmcloud/wasmcloud-test"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0"
