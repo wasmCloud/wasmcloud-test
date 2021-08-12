@@ -1,0 +1,26 @@
+# configuration for provider test
+
+# name of combiled binary (usually project name unless overridded in [[bin]]
+# Required
+bin_path = "target/debug/my_provider"
+
+# set RUST_LOG environment variable (default "info")
+#rust_log = "info"
+
+# set RUST_BACKTRACE (default: 0)
+#rust_backtrace = "0"
+
+# nats sholud be running. Uncommand to override the default url
+#nats_url = "0.0.0.0:4222"
+
+# redis should be running. Uncomment to override the default url
+#redis_url = "0.0.0.0:6379"
+
+# lattice prefix (default "default")
+#lattice_rpc_prefix = "default"
+
+# link name (default: "deefault")
+#link_name = "default"
+
+# name of contract under test
+contract_id = "wasmcloud:contract"
