@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+//!
 //! simple test harness to load a capability provider and test it
 //!
 use anyhow::anyhow;
@@ -225,6 +227,8 @@ pub fn load_config() -> Result<TomlMap,anyhow::Error> {
 /// Par file path should be either in the environment variable PROVIDER_TEST_PAR
 /// or in the config file as "par_file"
 pub async fn start_provider_test(config: TomlMap) -> Result<ProviderProcess, anyhow::Error> {
+
+    // code in progress - make it work for par files also
 
     //CARGO_BIN_EXE_<name>
 

@@ -10,6 +10,8 @@ repository = "https://github.com/wasmcloud/wasmcloud-test"
 readme = "README.md"
 
 [dependencies]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
 futures = "0.3"
@@ -22,9 +24,10 @@ termion = "1.5"
 tokio = { version = "1", features = ["full"]}
 toml = "0.5"
 wascap = "0.6"
+wasmbus-rpc = "0.3"
 
-[dependencies.wasmbus-rpc]
-version = "0.3"
-#path = "../../weld/rpc-rs"
+[dependencies.wasmcloud-interface-testing]
+version = "0"
+path = "../../interfaces/testing/rust"
 
 
