@@ -7,7 +7,6 @@ pub mod cli;
 // re-export testing interface
 pub use wasmcloud_interface_testing as testing;
 
-
 // these macros are supported on all build targets (wasm32 et. al.)
 
 /// check that the two expressions are equal, returning RpcError if they are not
@@ -43,7 +42,7 @@ macro_rules! check {
     }};
 }
 
-/// given a list of regex and a list of regex patterns for test cases, run all tests
+/// given a list of regex patterns for test cases, run all tests
 /// that match any of the patterns.
 /// The order of the test runs is based on the order of patterns.
 /// Tests are run at most once, even if they match more than one pattern.
@@ -52,9 +51,7 @@ macro_rules! run_selected {
     ( $opt:expr, $($tname:ident),* $(,)? ) => {{
         let mut unique = std::collections::BTreeSet::new();
         let all_tests = vec![".*".to_string()];
-        //let pats = $opt.patterns.as_ref::<&Vec<String>>().unwrap_or(&all_tests);
         let pats : &Vec<String> = $opt.patterns.as_ref();
-        //let pats: &Vec<String> = $opt.patterns.as_ref().unwrap_or(&all_tests);
         let mut results: Vec<TestResult> = Vec::new();
 
         // Each test case regex (pats) is checked against all test names (tname).
