@@ -6,6 +6,8 @@ pub mod cli;
 
 // re-export testing interface
 pub use wasmcloud_interface_testing as testing;
+// re-export regex
+pub use regex;
 
 // these macros are supported on all build targets (wasm32 et. al.)
 
@@ -59,7 +61,7 @@ macro_rules! run_selected {
         // always be run in the same order - these run in the order of the patterns.
         for tc_exp in pats.iter() {
             let pattern = tc_exp.as_str();
-            let re = match regex::Regex::new(pattern) {
+            let re = match $crate::regex::Regex::new(pattern) {
                 Ok(re) => re,
                 Err(e) => {
                     let error = wasmbus_rpc::RpcError::Other(format!(

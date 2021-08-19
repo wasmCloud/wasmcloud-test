@@ -4,35 +4,25 @@
 //!
 use anyhow::anyhow;
 use async_trait::async_trait;
-//use provider_archive::ProviderArchive;
-use std::{
-    convert::TryInto,
-    fs,
-    io::Write,
-    path::{PathBuf},
-};
-use wasmbus_rpc::{
-    core::{HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition, WasmCloudEntity},
-    Message, RpcResult, SendOpts,
-};
+use futures::future::BoxFuture;
+use std::{ops::Deref, sync::Arc, convert::TryInto, fs, io::Write, path::PathBuf};
+use tokio::sync::OnceCell;
 use toml::value::Value as TomlValue;
+use wasmbus_rpc::{ Context, Transport,
+core::{HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition, WasmCloudEntity},
+Message, RpcResult, SendOpts,
+};
+use crate::testing::TestResult;
 
 pub type SimpleValueMap = std::collections::HashMap<String, String>;
 pub type TomlMap = std::collections::BTreeMap<String, toml::Value>;
 pub type JsonMap = serde_json::Map<String, serde_json::Value>;
 
-use futures::future::BoxFuture;
-use termion::{color, style};
-use tokio::sync::OnceCell;
-use wasmbus_rpc::{provider::prelude::Context };
-
-//type Result<T> = std::result::Result<T, anyhow::Error>;
 
 const DEFAULT_NATS_URL: &str = "0.0.0.0:4222";
 
-static ONCE: OnceCell<ProviderProcess> = OnceCell::const_new();
+static ONCE: OnceCell<Provider> = OnceCell::const_new();
 pub type TestFunc = fn() -> BoxFuture<'static, RpcResult<()>>;
-//type TestVec = Vec<(&'static str, TestFunc)>;
 
 /// Ways to specify linkdef values for the provider
 #[allow(dead_code)]
@@ -75,6 +65,11 @@ impl TryInto<SimpleValueMap> for LinkValues {
         }
         Ok(map)
     }
+}
+
+#[derive(Clone)]
+pub struct Provider {
+    inner: Arc<ProviderProcess>,
 }
 
 /// info needed to test a capability provider process. If this structure goes out of scope,
@@ -160,7 +155,11 @@ impl ProviderProcess {
     }
 
     /// send a control message to the provider:put link, get link, or shutdown
-    pub async fn send_ctl_json<Arg, Resp>(&self, topic: &str, data: Arg) -> Result<Resp, anyhow::Error>
+    pub async fn send_ctl_json<Arg, Resp>(
+        &self,
+        topic: &str,
+        data: Arg,
+    ) -> Result<Resp, anyhow::Error>
     where
         Arg: serde::Serialize,
         Resp: serde::de::DeserializeOwned,
@@ -175,23 +174,35 @@ impl ProviderProcess {
     pub async fn shutdown(&self) -> Result<(), anyhow::Error> {
         let shutdown_topic = format!(
             "wasmbus.rpc.{}.{}.{}.shutdown",
-            &self.host_data.lattice_rpc_prefix, &self.host_data.provider_key, self.host_data.link_name
+            &self.host_data.lattice_rpc_prefix,
+            &self.host_data.provider_key,
+            self.host_data.link_name
         );
-        eprintln!("Sending shutdown to provider {}", &self.host_data.provider_key);
+        eprintln!(
+            "Sending shutdown to provider {}",
+            &self.host_data.provider_key
+        );
         self.client.publish(&shutdown_topic, b"").await?;
         Ok(())
     }
 }
 
 #[async_trait]
-impl wasmbus_rpc::Transport for ProviderProcess {
+impl Transport for Provider {
     async fn send(
         &self,
         _ctx: &Context,
         message: Message<'_>,
         _opts: Option<SendOpts>,
     ) -> RpcResult<Vec<u8>> {
-        self.send_rpc(message).await
+        self.inner.send_rpc(message).await
+    }
+}
+
+impl Deref for Provider {
+    type Target = ProviderProcess;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
 
@@ -205,20 +216,27 @@ pub(crate) fn nats_url(config: &TomlMap) -> String {
 
 /// load toml configuration. looks for environment variable "PROVIDER_TEST_CONFIG",
 /// otherwise loads defaults.
-pub fn load_config() -> Result<TomlMap,anyhow::Error> {
+pub fn load_config() -> Result<TomlMap, anyhow::Error> {
     let path = if let Ok(path) = std::env::var("PROVIDER_TEST_CONFIG") {
         PathBuf::from(path)
-    } else {PathBuf::from("./provider_test_config.toml")};
+    } else {
+        PathBuf::from("./provider_test_config.toml")
+    };
     let data = if !path.is_file() {
         Err(anyhow!(
                 "Missing configuration file '{}'. Config file should be 'provider_test_config.toml' in the current directory, or a .toml file whose path is in the environment variable 'PROVIDER_TEST_CONFIG'", &path.display())
             )
     } else {
-        fs::read_to_string(&path).map_err(|e| {
-            anyhow!("failed reading config from {}: {}", &path.display(), e )
-        })
+        fs::read_to_string(&path)
+            .map_err(|e| anyhow!("failed reading config from {}: {}", &path.display(), e))
     }?;
-    let map = toml::from_str(&data).map_err(|e| anyhow!("parse error in configuration file loaded from {}: {}", &path.display(), e))?;
+    let map = toml::from_str(&data).map_err(|e| {
+        anyhow!(
+            "parse error in configuration file loaded from {}: {}",
+            &path.display(),
+            e
+        )
+    })?;
     Ok(map)
 }
 
@@ -226,8 +244,7 @@ pub fn load_config() -> Result<TomlMap,anyhow::Error> {
 /// Configuration file path should be in the environment variable PROVIDER_TEST_CONFIG
 /// Par file path should be either in the environment variable PROVIDER_TEST_PAR
 /// or in the config file as "par_file"
-pub async fn start_provider_test(config: TomlMap) -> Result<ProviderProcess, anyhow::Error> {
-
+pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Error> {
     // code in progress - make it work for par files also
 
     //CARGO_BIN_EXE_<name>
@@ -265,8 +282,12 @@ pub async fn start_provider_test(config: TomlMap) -> Result<ProviderProcess, any
     let exe_file = rd_file; // drop original and use read-only handle
      */
     let exe_path = match config.get("bin_path") {
-        Some(TomlValue::String(name)) =>  PathBuf::from(name),
-        _ => return Err(anyhow!("Must specifiy binary path in 'bin_path' in config file"))
+        Some(TomlValue::String(name)) => PathBuf::from(name),
+        _ => {
+            return Err(anyhow!(
+                "Must specifiy binary path in 'bin_path' in config file"
+            ))
+        }
     };
     let pubkey = format!("_PubKey_{}", &exe_path.display());
     let exe_file = fs::File::open(&exe_path)?;
@@ -274,12 +295,13 @@ pub async fn start_provider_test(config: TomlMap) -> Result<ProviderProcess, any
     // set logging level for capability provider with the "RUST_LOG" environment variable,
     // default level is "info"
     let log_level = match config.get("rust_log") {
-        Some(TomlValue::String(level)) if level.parse::<log::Level>().is_ok() => {
-                level.to_string()
-        }
+        Some(TomlValue::String(level)) if level.parse::<log::Level>().is_ok() => level.to_string(),
         None => "info".to_string(),
         Some(x) => {
-            eprintln!("invalid 'rust_log' setting '{}', using 'info'", x.to_string());
+            eprintln!(
+                "invalid 'rust_log' setting '{}', using 'info'",
+                x.to_string()
+            );
             "info".to_string()
         }
     };
@@ -316,7 +338,7 @@ pub async fn start_provider_test(config: TomlMap) -> Result<ProviderProcess, any
     let mut child_proc = std::process::Command::new(&exe_path)
         .stdin(std::process::Stdio::piped())
         .env("RUST_LOG", &log_level)
-        .env("RUST_BACKTRACE", enable_backtrace )
+        .env("RUST_BACKTRACE", enable_backtrace)
         .spawn()
         .map_err(|e| anyhow!("launching provider bin at {}: {}", &exe_path.display(), e))?;
 
@@ -341,14 +363,14 @@ pub async fn start_provider_test(config: TomlMap) -> Result<ProviderProcess, any
     let keys = wascap::prelude::KeyPair::new_user();
     let client = wasmbus_rpc::RpcClient::new(nc, &host_data.lattice_rpc_prefix, keys);
 
-    Ok(ProviderProcess {
+    Ok(Provider{ inner: Arc::new(ProviderProcess {
         file: exe_file,
         path: exe_path,
         proc: child_proc,
         host_data,
         config,
         client,
-    })
+    })})
 }
 
 /*
@@ -428,9 +450,65 @@ fn save_to_tempfile(bytes: &[u8]) -> Result<(fs::File, PathBuf)> {
 }
  */
 
+/// given a list of regex patterns for test cases, run all tests
+/// that match any of the patterns.
+/// The order of the test runs is based on the order of patterns.
+/// Tests are run at most once, even if they match more than one pattern.
+/// This is like the `run_selected!` macro, except that it spawns
+/// a thread for running the test case, so it can handle panics
+/// (and failed assertions, which panic).
+#[macro_export]
+macro_rules! run_selected_spawn {
+    ( $opt:expr, $($tname:ident),* $(,)? ) => {{
+        let mut unique = std::collections::BTreeSet::new();
+        let handle = tokio::runtime::Handle::current();
+        let all_tests = vec![".*".to_string()];
+        let pats : &Vec<String> = $opt.patterns.as_ref();
+        let mut results: Vec<TestResult> = Vec::new();
+
+        // Each test case regex (pats) is checked against all test names (tname).
+        // This would be simpler to use a RegexSet, but then the tests would
+        // always be run in the same order - these run in the order of the patterns.
+        for tc_exp in pats.iter() {
+            let pattern = tc_exp.as_str();
+            let re = match $crate::regex::Regex::new(pattern) {
+                Ok(re) => re,
+                Err(e) => {
+                    let error = wasmbus_rpc::RpcError::Other(format!(
+                        "invalid regex spec '{}' for test case: {}",
+                        pattern, e
+                    ));
+                    results.push(("TestCase", Err::<(),wasmbus_rpc::RpcError>(error)).into());
+                    break;
+                }
+            };
+            $(
+            let name = stringify!($tname);
+            if re.is_match(name) {
+                // run it if it hasn't been run before
+                if unique.insert(name) {
+                    let opts = $opt.clone();
+                    let join = handle.spawn( async move {
+                        $tname(&opts).await
+                        }
+                    ).await;
+                    let tr:TestResult = match join {
+                        Ok(res) => (name, res).into(),
+                        Err(e) => (name, Err::<(),wasmbus_rpc::RpcError>(
+                            wasmbus_rpc::RpcError::Other(format!("join error: {}", e.to_string()))
+                        )).into()
+                    };
+                    results.push(tr);
+                }
+            }
+            )*
+        }
+        results
+    }};
+}
 
 /// Execute all tests. In the current implementation,
-/// all tests are run in sequentially, and always in the same order.
+/// all tests are run sequentially, and always in the same order.
 // A future version of this should take a parameter for a scheduling strategy,
 // which could permit options such as
 // enum RunStrategy{
@@ -438,44 +516,27 @@ fn save_to_tempfile(bytes: &[u8]) -> Result<(fs::File, PathBuf)> {
 //   Random,
 //   Parallel(u16),  // num_threads
 // }
-pub async fn run_tests(tests: Vec<(&'static str, TestFunc)>) -> std::result::Result<(usize,usize),Box<dyn std::error::Error>>{
-    let mut passed = 0usize;
-    let total = tests.len();
+// this is not in use now, since run_selected! seems to work fine running
+// all test cases in the current thread (async executor).
+// The reason I had put the spawn in was to catch panics from assert
+// calls that fail.
+pub async fn run_tests(
+    tests: Vec<(&'static str, TestFunc)>,
+) -> std::result::Result<Vec<TestResult>, Box<dyn std::error::Error>> {
+    let mut results:Vec<TestResult> = Vec::new();
     let handle = tokio::runtime::Handle::current();
     for t in tests.into_iter() {
-        match handle.spawn((&t.1)()).await? {
-            Ok(()) => {
-                println!("{} Pass {}: {}",
-                         color::Fg(color::Green), style::Reset, t.0);
-                passed += 1;
-            }
-            Err(e) => {
-                println!(
-                    "{} Fail {}: {}  {}",
-                    color::Fg(color::Red),
-                    style::Reset,
-                    t.0,
-                    e.to_string()
-                );
-            }
-        };
+        let rc:RpcResult<()> = handle.spawn((&t.1)()).await?;
+        results.push((t.0, rc).into());
     }
 
     let provider = test_provider().await;
     let _ = provider.shutdown().await; // send shutdown message
 
-    let status_color = if passed == total {
-        color::Fg(color::Green).to_string()
-    } else {
-        color::Fg(color::Red).to_string()
-    };
-    println!("Test results: {}{}/{} Passed{}",
-        status_color, passed, total, style::Reset);
-
-    Ok((passed,total))
+    Ok(results)
 }
 
-pub async fn test_provider() -> &'static ProviderProcess {
+pub async fn test_provider() -> Provider {
     ONCE.get_or_init(|| async {
         match load_provider().await {
             Ok(p) => p,
@@ -484,10 +545,10 @@ pub async fn test_provider() -> &'static ProviderProcess {
             }
         }
     })
-        .await
+    .await.clone()
 }
 
-pub async fn load_provider() -> Result<ProviderProcess, Box<dyn std::error::Error>> {
+pub async fn load_provider() -> Result<Provider, Box<dyn std::error::Error>> {
     let conf = load_config()?;
     let prov = start_provider_test(conf).await?;
 
