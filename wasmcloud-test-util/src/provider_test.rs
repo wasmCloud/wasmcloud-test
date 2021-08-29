@@ -2,22 +2,22 @@
 //!
 //! simple test harness to load a capability provider and test it
 //!
+use crate::testing::TestResult;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
-use std::{ops::Deref, sync::Arc, convert::TryInto, fs, io::Write, path::PathBuf};
+use std::{convert::TryInto, fs, io::Write, ops::Deref, path::PathBuf, sync::Arc};
 use tokio::sync::OnceCell;
 use toml::value::Value as TomlValue;
-use wasmbus_rpc::{ Context, Transport,
-core::{HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition, WasmCloudEntity},
-Message, RpcResult, SendOpts,
+use wasmbus_rpc::{
+    core::{HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition, WasmCloudEntity},
+    provider::NatsClient,
+    Context, Message, RpcResult, SendOpts, Transport,
 };
-use crate::testing::TestResult;
 
 pub type SimpleValueMap = std::collections::HashMap<String, String>;
 pub type TomlMap = std::collections::BTreeMap<String, toml::Value>;
 pub type JsonMap = serde_json::Map<String, serde_json::Value>;
-
 
 const DEFAULT_NATS_URL: &str = "0.0.0.0:4222";
 
@@ -351,7 +351,7 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
     stdin.write_all(encoded.as_bytes())?;
 
     // Connect to nats
-    let nc = ratsio::NatsClient::new(host_data.nats_options())
+    let nc = NatsClient::new(host_data.nats_options())
         .await
         .map_err(|e| {
             anyhow!(
@@ -363,14 +363,16 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
     let keys = wascap::prelude::KeyPair::new_user();
     let client = wasmbus_rpc::RpcClient::new(nc, &host_data.lattice_rpc_prefix, keys);
 
-    Ok(Provider{ inner: Arc::new(ProviderProcess {
-        file: exe_file,
-        path: exe_path,
-        proc: child_proc,
-        host_data,
-        config,
-        client,
-    })})
+    Ok(Provider {
+        inner: Arc::new(ProviderProcess {
+            file: exe_file,
+            path: exe_path,
+            proc: child_proc,
+            host_data,
+            config,
+            client,
+        }),
+    })
 }
 
 /*
@@ -523,10 +525,10 @@ macro_rules! run_selected_spawn {
 pub async fn run_tests(
     tests: Vec<(&'static str, TestFunc)>,
 ) -> std::result::Result<Vec<TestResult>, Box<dyn std::error::Error>> {
-    let mut results:Vec<TestResult> = Vec::new();
+    let mut results: Vec<TestResult> = Vec::new();
     let handle = tokio::runtime::Handle::current();
     for t in tests.into_iter() {
-        let rc:RpcResult<()> = handle.spawn((&t.1)()).await?;
+        let rc: RpcResult<()> = handle.spawn((&t.1)()).await?;
         results.push((t.0, rc).into());
     }
 
@@ -545,7 +547,8 @@ pub async fn test_provider() -> Provider {
             }
         }
     })
-    .await.clone()
+    .await
+    .clone()
 }
 
 pub async fn load_provider() -> Result<Provider, Box<dyn std::error::Error>> {
