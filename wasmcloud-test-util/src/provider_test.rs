@@ -5,14 +5,15 @@
 use crate::testing::TestResult;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use futures::future::BoxFuture;
-use std::{convert::TryInto, fs, io::Write, ops::Deref, path::PathBuf, sync::Arc};
+use futures::{future::BoxFuture, Stream};
+use std::{ fs, io::Write, ops::Deref, path::PathBuf, sync::Arc};
 use tokio::sync::OnceCell;
 use toml::value::Value as TomlValue;
+use serde::Serialize;
 use wasmbus_rpc::{
     core::{HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition, WasmCloudEntity},
-    provider::NatsClient,
-    Context, Message, RpcResult, SendOpts, Transport,
+    provider::ratsio::{ops::Message as NatsMessage, NatsClient, NatsSid},
+    Context, Message, RpcError, RpcResult, SendOpts, Transport,
 };
 
 pub type SimpleValueMap = std::collections::HashMap<String, String>;
@@ -20,51 +21,20 @@ pub type TomlMap = std::collections::BTreeMap<String, toml::Value>;
 pub type JsonMap = serde_json::Map<String, serde_json::Value>;
 
 const DEFAULT_NATS_URL: &str = "0.0.0.0:4222";
+// use a unique lattice prefix to separate test traffic
+const TEST_LATTICE_PREFIX: &str = "TEST";
 
 static ONCE: OnceCell<Provider> = OnceCell::const_new();
 pub type TestFunc = fn() -> BoxFuture<'static, RpcResult<()>>;
 
-/// Ways to specify linkdef values for the provider
-#[allow(dead_code)]
-pub enum LinkValues {
-    /// the "classic" map of string keys and string values
-    Values(SimpleValueMap),
 
-    /// a json data structure that will be serialized and base64-encoded
-    Json(JsonMap),
-
-    /// data from a toml file that will be serialized and base64-encoded
-    Toml(TomlMap),
-
-    /// nothing - no values
-    Empty,
-}
-
-impl TryInto<SimpleValueMap> for LinkValues {
-    type Error = anyhow::Error;
-
-    fn try_into(self) -> Result<SimpleValueMap, Self::Error> {
-        let mut map = SimpleValueMap::default();
-        match self {
-            LinkValues::Values(s_map) => {
-                map = s_map;
-            }
-            LinkValues::Json(json) => {
-                let val = serde_json::to_string(&json)
-                    .map_err(|e| anyhow!("link values serialization: {}", e.to_string()))?;
-                let b64 = base64::encode_config(&val, base64::STANDARD_NO_PAD);
-                map.insert("config_b64".to_string(), b64);
-            }
-            LinkValues::Toml(toml) => {
-                let val = toml::to_string(&toml)
-                    .map_err(|e| anyhow!("link values serialization: {}", e.to_string()))?;
-                let b64 = base64::encode_config(&val, base64::STANDARD_NO_PAD);
-                map.insert("config_b64".to_string(), b64);
-            }
-            LinkValues::Empty => {}
-        }
-        Ok(map)
-    }
+fn to_value_map<T:Serialize>(data: &T) -> RpcResult<SimpleValueMap> {
+    let mut map = SimpleValueMap::default();
+    let json = serde_json::to_string(data)
+        .map_err(|e| RpcError::Ser(format!("invalid 'values' map: {}", e)))?;
+    let b64 = base64::encode_config(&json, base64::STANDARD_NO_PAD);
+    map.insert("config_b64".to_string(), b64);
+    Ok(map)
 }
 
 #[derive(Clone)]
@@ -80,7 +50,8 @@ pub struct ProviderProcess {
     pub path: PathBuf,
     pub proc: std::process::Child,
     pub config: TomlMap,
-    pub client: wasmbus_rpc::RpcClient,
+    pub nats_client: Arc<NatsClient>,
+    pub rpc_client: wasmbus_rpc::RpcClient,
 }
 
 impl ProviderProcess {
@@ -104,7 +75,7 @@ impl ProviderProcess {
     }
 
     /// link the test to the provider
-    pub async fn link_to_test(&self, values: LinkValues) -> Result<(), anyhow::Error> {
+    pub async fn link_to_test(&self, values: SimpleValueMap) -> Result<(), anyhow::Error> {
         let topic = format!(
             "wasmbus.rpc.{}.{}.{}.linkdefs.put",
             &self.host_data.lattice_rpc_prefix,
@@ -122,11 +93,11 @@ impl ProviderProcess {
                 .to_string(),
             link_name: self.host_data.link_name.clone(),
             provider_id: self.host_data.provider_key.clone(),
-            values: values.try_into()?,
+            values ,
         };
         //let bytes = wasmbus_rpc::serialize(&ld)?;
         let bytes = serde_json::to_vec(&ld)?;
-        let _resp = self.client.publish(&topic, &bytes).await?;
+        let _resp = self.rpc_client.publish(&topic, &bytes).await?;
         Ok(())
     }
 
@@ -149,9 +120,20 @@ impl ProviderProcess {
 
     /// send an rpc message to the provider
     pub async fn send_rpc(&self, message: Message<'_>) -> RpcResult<Vec<u8>> {
-        self.client
+        self.rpc_client
             .send(self.origin(), self.target(), message)
             .await
+    }
+
+    /// subscribe to rpc messages from the provider using the established link
+    pub async fn subscribe_rpc(
+        &self,
+    ) -> RpcResult<(NatsSid, impl Stream<Item = NatsMessage> + Send + Sync)> {
+        let subject = wasmbus_rpc::rpc_topic(&self.origin(), &self.host_data.lattice_rpc_prefix);
+        self.nats_client
+            .subscribe(subject)
+            .await
+            .map_err(|e| wasmbus_rpc::RpcError::Nats(e.to_string()))
     }
 
     /// send a control message to the provider:put link, get link, or shutdown
@@ -165,7 +147,7 @@ impl ProviderProcess {
         Resp: serde::de::DeserializeOwned,
     {
         let bytes = serde_json::to_vec(&data)?;
-        let resp_bytes = self.client.request(topic, &bytes).await?;
+        let resp_bytes = self.rpc_client.request(topic, &bytes).await?;
         let resp = serde_json::from_slice::<Resp>(&resp_bytes)?;
         Ok(resp)
     }
@@ -182,7 +164,7 @@ impl ProviderProcess {
             "Sending shutdown to provider {}",
             &self.host_data.provider_key
         );
-        self.client.publish(&shutdown_topic, b"").await?;
+        self.rpc_client.publish(&shutdown_topic, b"").await?;
         Ok(())
     }
 }
@@ -319,7 +301,7 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
         lattice_rpc_prefix: config
             .get("lattice_rpc_prefix")
             .and_then(|v| v.as_str())
-            .unwrap_or("default")
+            .unwrap_or(TEST_LATTICE_PREFIX)
             .to_string(),
         lattice_rpc_url: nats_url(&config),
         link_name: config
@@ -351,7 +333,7 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
     stdin.write_all(encoded.as_bytes())?;
 
     // Connect to nats
-    let nc = NatsClient::new(host_data.nats_options())
+    let nats_client = NatsClient::new(host_data.nats_options())
         .await
         .map_err(|e| {
             anyhow!(
@@ -361,7 +343,8 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
             )
         })?;
     let keys = wascap::prelude::KeyPair::new_user();
-    let client = wasmbus_rpc::RpcClient::new(nc, &host_data.lattice_rpc_prefix, keys);
+    let client =
+        wasmbus_rpc::RpcClient::new(nats_client.clone(), &host_data.lattice_rpc_prefix, keys);
 
     Ok(Provider {
         inner: Arc::new(ProviderProcess {
@@ -370,7 +353,8 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
             proc: child_proc,
             host_data,
             config,
-            client,
+            nats_client,
+            rpc_client: client,
         }),
     })
 }
@@ -552,14 +536,19 @@ pub async fn test_provider() -> Provider {
 }
 
 pub async fn load_provider() -> Result<Provider, Box<dyn std::error::Error>> {
-    let conf = load_config()?;
+    let mut conf = load_config()?;
+    let values = conf.remove("values");
+
     let prov = start_provider_test(conf).await?;
 
     // give it time to startup
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
-    // set link params so we can send rpc
-    prov.link_to_test(LinkValues::Empty).await?;
-
+    let link_values = if let Some(toml::Value::Table(map)) = values {
+        to_value_map(&map)?
+    } else {
+        SimpleValueMap::default()
+    };
+    prov.link_to_test(link_values).await?;
     Ok(prov)
 }
