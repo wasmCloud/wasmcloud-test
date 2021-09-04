@@ -6,10 +6,10 @@ use crate::testing::TestResult;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::{future::BoxFuture, Stream};
-use std::{ fs, io::Write, ops::Deref, path::PathBuf, sync::Arc};
+use serde::Serialize;
+use std::{fs, io::Write, ops::Deref, path::PathBuf, sync::Arc};
 use tokio::sync::OnceCell;
 use toml::value::Value as TomlValue;
-use serde::Serialize;
 use wasmbus_rpc::{
     core::{HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition, WasmCloudEntity},
     provider::ratsio::{ops::Message as NatsMessage, NatsClient, NatsSid},
@@ -27,8 +27,7 @@ const TEST_LATTICE_PREFIX: &str = "TEST";
 static ONCE: OnceCell<Provider> = OnceCell::const_new();
 pub type TestFunc = fn() -> BoxFuture<'static, RpcResult<()>>;
 
-
-fn to_value_map<T:Serialize>(data: &T) -> RpcResult<SimpleValueMap> {
+fn to_value_map<T: Serialize>(data: &T) -> RpcResult<SimpleValueMap> {
     let mut map = SimpleValueMap::default();
     let json = serde_json::to_string(data)
         .map_err(|e| RpcError::Ser(format!("invalid 'values' map: {}", e)))?;
@@ -93,7 +92,7 @@ impl ProviderProcess {
                 .to_string(),
             link_name: self.host_data.link_name.clone(),
             provider_id: self.host_data.provider_key.clone(),
-            values ,
+            values,
         };
         //let bytes = wasmbus_rpc::serialize(&ld)?;
         let bytes = serde_json::to_vec(&ld)?;
@@ -399,7 +398,6 @@ fn extract_target_exe(par: &ProviderArchive) -> Result<(fs::File, PathBuf)> {
     Ok((file, path))
 }
  */
-
 /*
 /// make the extracted file executable
 // #[cfg(any(target_os = "linux", target_os = "macos"))]
