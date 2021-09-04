@@ -1,9 +1,8 @@
 //! cli utilities
-#[cfg(not(target_arch = "wasm32"))]
-
-use termion::{color, style};
-use wasmcloud_interface_testing::{TestResult};
 use serde::Deserialize;
+#[cfg(not(target_arch = "wasm32"))]
+use termion::{color, style};
+use wasmcloud_interface_testing::TestResult;
 
 // structure for deserializing error results
 #[derive(Deserialize)]
