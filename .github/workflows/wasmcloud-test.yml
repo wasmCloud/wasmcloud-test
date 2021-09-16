@@ -6,7 +6,7 @@ on:
     paths:
     - "wasmcloud-test-util/**"
     tags:
-    - "v-*"
+    - "wasmcloud-test-util-v-*"
   pull_request:
     branches: [ main ]
     paths:
