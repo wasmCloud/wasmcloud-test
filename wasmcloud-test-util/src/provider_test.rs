@@ -23,6 +23,7 @@ pub type JsonMap = serde_json::Map<String, serde_json::Value>;
 const DEFAULT_NATS_URL: &str = "0.0.0.0:4222";
 // use a unique lattice prefix to separate test traffic
 const TEST_LATTICE_PREFIX: &str = "TEST";
+const TEST_HOST_ID: &str = "NwasmCloudTestProvider0000000000000000000000000000000000";
 
 static ONCE: OnceCell<Provider> = OnceCell::const_new();
 pub type TestFunc = fn() -> BoxFuture<'static, RpcResult<()>>;
@@ -342,8 +343,12 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
             )
         })?;
     let keys = wascap::prelude::KeyPair::new_user();
-    let client =
-        wasmbus_rpc::RpcClient::new(nats_client.clone(), &host_data.lattice_rpc_prefix, keys);
+    let client = wasmbus_rpc::RpcClient::new(
+        nats_client.clone(),
+        &host_data.lattice_rpc_prefix,
+        keys,
+        TEST_HOST_ID.to_string(),
+    );
 
     Ok(Provider {
         inner: Arc::new(ProviderProcess {
