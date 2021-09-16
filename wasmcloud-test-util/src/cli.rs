@@ -11,7 +11,7 @@ struct ErrorReport {
 }
 
 /// print test results to console
-pub fn print_test_results(results: &Vec<TestResult>) {
+pub fn print_test_results(results: &[TestResult]) {
     let mut passed = 0u32;
     let total = results.len() as u32;
     for test in results.iter() {
@@ -27,7 +27,7 @@ pub fn print_test_results(results: &Vec<TestResult>) {
             }
             false => {
                 let error_msg = if let Some(bytes) = &test.snap_data {
-                    if let Ok(report) = serde_json::from_slice::<ErrorReport>(&bytes) {
+                    if let Ok(report) = serde_json::from_slice::<ErrorReport>(bytes) {
                         report.error.to_string()
                     } else {
                         "".to_string()
