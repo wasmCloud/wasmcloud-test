@@ -11,7 +11,7 @@ readme = "README.md"
 
 [dependencies]
 wasmcloud-interface-testing = "0.1.5"
-wasmbus-rpc = "0.4.4"
+wasmbus-rpc = "0.4.3"
 regex = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
