@@ -27,7 +27,7 @@ pub fn print_test_results(results: &[TestResult]) {
     let mut red = ColorSpec::new();
     red.set_fg(Some(Color::Red));
     for test in results.iter() {
-        if test.pass {
+        if test.passed {
             let _ = stdout.set_color(&green);
             write!(&mut stdout, "Pass").unwrap();
             let _ = stdout.reset();

@@ -20,7 +20,9 @@ pub type SimpleValueMap = std::collections::HashMap<String, String>;
 pub type TomlMap = std::collections::BTreeMap<String, toml::Value>;
 pub type JsonMap = serde_json::Map<String, serde_json::Value>;
 
-const DEFAULT_NATS_URL: &str = "0.0.0.0:4222";
+const DEFAULT_START_DELAY_SEC: u64 = 1;
+const DEFAULT_RPC_TIMEOUT_MILLIS: u64 = 2000;
+const DEFAULT_NATS_URL: &str = "127.0.0.1:4222";
 // use a unique lattice prefix to separate test traffic
 const TEST_LATTICE_PREFIX: &str = "TEST";
 const TEST_HOST_ID: &str = "NwasmCloudTestProvider0000000000000000000000000000000000";
@@ -52,6 +54,7 @@ pub struct ProviderProcess {
     pub config: TomlMap,
     pub nats_client: Arc<NatsClient>,
     pub rpc_client: wasmbus_rpc::RpcClient,
+    pub timeout_ms: std::sync::Mutex<u64>,
 }
 
 impl ProviderProcess {
@@ -95,9 +98,9 @@ impl ProviderProcess {
             provider_id: self.host_data.provider_key.clone(),
             values,
         };
-        //let bytes = wasmbus_rpc::serialize(&ld)?;
         let bytes = serde_json::to_vec(&ld)?;
-        let _resp = self.rpc_client.publish(&topic, &bytes).await?;
+        self.rpc_client.publish(&topic, &bytes).await?;
+
         Ok(())
     }
 
@@ -120,9 +123,18 @@ impl ProviderProcess {
 
     /// send an rpc message to the provider
     pub async fn send_rpc(&self, message: Message<'_>) -> RpcResult<Vec<u8>> {
-        self.rpc_client
+        match self
+            .rpc_client
+            //.send_timeout(self.origin(), self.target(), message, std::time::Duration::from_millis(self.get_timeout_ms()))
             .send(self.origin(), self.target(), message)
             .await
+        {
+            Err(e) => {
+                eprintln!("ProviderTest: rpc returned error: {}", e);
+                Err(e)
+            }
+            Ok(v) => Ok(v),
+        }
     }
 
     /// subscribe to rpc messages from the provider using the established link
@@ -167,6 +179,20 @@ impl ProviderProcess {
         self.rpc_client.publish(&shutdown_topic, b"").await?;
         Ok(())
     }
+
+    /*
+    fn get_timeout_ms(&self) -> u64 {
+        let lock = self.timeout_ms.try_lock();
+        if let Ok(rg) = lock {
+            *rg
+        } else {
+            // only if mutex was poisioned, which would only happen
+            // if somebody paniced while holding this mutex.
+            // but test threads stop after a panic, so this should never happen
+            DEFAULT_RPC_TIMEOUT_MILLIS
+        }
+    }
+     */
 }
 
 #[async_trait]
@@ -176,8 +202,21 @@ impl Transport for Provider {
         _ctx: &Context,
         message: Message<'_>,
         _opts: Option<SendOpts>,
-    ) -> RpcResult<Vec<u8>> {
+    ) -> std::result::Result<Vec<u8>, RpcError> {
         self.inner.send_rpc(message).await
+    }
+
+    /// sets the time period for an expected response to rpc messages,
+    /// after which an RpcError::Timeout will occur.
+    fn set_timeout(&self, interval: std::time::Duration) {
+        let lock = self.timeout_ms.try_lock();
+        if let Ok(mut rg) = lock {
+            *rg = interval.as_millis() as u64
+        } else {
+            // only if mutex was poisioned, which would only happen
+            // if somebody paniced while holding this mutex.
+            // but test threads stop after a panic, so this should never happen
+        }
     }
 }
 
@@ -227,42 +266,6 @@ pub fn load_config() -> Result<TomlMap, anyhow::Error> {
 /// Par file path should be either in the environment variable PROVIDER_TEST_PAR
 /// or in the config file as "par_file"
 pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Error> {
-    // code in progress - make it work for par files also
-
-    //CARGO_BIN_EXE_<name>
-
-    /*
-    let par_file = if let Ok(path) = std::env::var("PROVIDER_TEST_PAR") {
-        let pb = PathBuf::from(&path);
-        if !pb.is_file() {
-            return Err(anyhow!(
-                "no par file found at {} (from PROVIDER_TEST_PAR)",
-                &path
-            ));
-        }
-        pb
-    } else {
-        if let Some(path_val) = config.get("par_file") {
-            let path = path_val.to_string();
-            let pb = PathBuf::from(&path);
-            if !pb.is_file() {
-                return Err(anyhow!(
-                    "no par file found at {} (from config 'par_file'). Update config or set the path in the environment variable PROVIDER_TEST_PAR",
-                    &path
-                ));
-            }
-            pb
-        } else {
-            return Err(anyhow!("Must specify par file in environment variable PROVIDER_TEST_PAR or in config file with the setting 'par_file'"));
-        }
-    };
-    let (pubkey, exe_file, exe_path) = get_par_key_and_exe(&par_file)?;
-    // make sure our handle is read-only
-    let _ = exe_file.sync_all();
-    let rd_file = fs::File::open(&exe_path)?;
-    drop(exe_file);
-    let exe_file = rd_file; // drop original and use read-only handle
-     */
     let exe_path = match config.get("bin_path") {
         Some(TomlValue::String(name)) => PathBuf::from(name),
         _ => {
@@ -280,10 +283,7 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
         Some(TomlValue::String(level)) if level.parse::<log::Level>().is_ok() => level.to_string(),
         None => "info".to_string(),
         Some(x) => {
-            eprintln!(
-                "invalid 'rust_log' setting '{}', using 'info'",
-                x.to_string()
-            );
+            eprintln!("invalid 'rust_log' setting '{}', using 'info'", x);
             "info".to_string()
         }
     };
@@ -296,6 +296,7 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
         _ => "0",
     };
 
+    let keys = wascap::prelude::KeyPair::new_user();
     let host_data = HostData {
         host_id: "_TEST_".to_string(),
         lattice_rpc_prefix: config
@@ -310,6 +311,7 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
             .unwrap_or("default")
             .to_string(),
         provider_key: pubkey,
+        cluster_issuers: vec![keys.public_key()],
         ..Default::default()
     };
     let buf = serde_json::to_vec(&host_data)?;
@@ -329,7 +331,6 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
         .take()
         .ok_or_else(|| anyhow!("failed to open child stdin"))?;
 
-    // come back and check on whether we need another process. don't think so
     stdin.write_all(encoded.as_bytes())?;
 
     // Connect to nats
@@ -342,12 +343,12 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
                 e.to_string()
             )
         })?;
-    let keys = wascap::prelude::KeyPair::new_user();
     let client = wasmbus_rpc::RpcClient::new(
         nats_client.clone(),
         &host_data.lattice_rpc_prefix,
         keys,
         TEST_HOST_ID.to_string(),
+        None,
     );
 
     Ok(Provider {
@@ -359,85 +360,10 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
             config,
             nats_client,
             rpc_client: client,
+            timeout_ms: std::sync::Mutex::new(DEFAULT_RPC_TIMEOUT_MILLIS),
         }),
     })
 }
-
-/*
-/// get the provider public key and native executable
-fn get_par_key_and_exe(path: &Path) -> Result<(String, fs::File, PathBuf)> {
-    // read archive file into memory and interpret as par file
-    let bytes = fs::read(path)
-        .map_err(|e| anyhow!("failed to read archive at {}: {}", &path.display(), e))?;
-    let archive = ProviderArchive::try_load(&bytes)
-        .map_err(|e| anyhow!("invalid par format for {}: {}", &path.display(), e))?;
-
-    let pub_key = archive.claims().ok_or_else(|| {
-        anyhow!(
-            "par file {} has invalid format: no public key",
-            path.display()
-        )
-    })?;
-    let (file, path) = extract_target_exe(&archive)?;
-    Ok((pub_key.subject, file, path))
-}
- */
-
-/*
-/// get target tuple, e.g., "x86_64-linux"
-fn native_target() -> String {
-    format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
-}
- */
-
-/*
-/// save native binary from par into temp file
-fn extract_target_exe(par: &ProviderArchive) -> Result<(fs::File, PathBuf)> {
-    let target = native_target();
-    let bytes = par
-        .target_bytes(&target)
-        .ok_or_else(|| anyhow!("no target found for platform {} in par file", &target))?;
-    let (file, path) = save_to_tempfile(&bytes)
-        .map_err(|e| anyhow!("error extracting bin file from par: {}", e))?;
-    set_executable_mode(&path)?;
-    Ok((file, path))
-}
- */
-/*
-/// make the extracted file executable
-// #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[cfg(unix)]
-fn set_executable_mode(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    eprintln!("setting file permission");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
-    Ok(())
-}
- */
-
-/*
-// #[cfg(target_family = "windows")]
-#[cfg(not(unix))]
-fn set_executable_mode(file: fs::File) -> Result<()> {
-    todo!()
-}
-
- */
-/*
-/// create temporary file and save bytes to it,
-/// returning file handle and its path
-fn save_to_tempfile(bytes: &[u8]) -> Result<(fs::File, PathBuf)> {
-    use tempfile::NamedTempFile;
-
-    // Create a file inside of `std::env::temp_dir()`.
-    let mut temp = NamedTempFile::new()?;
-
-    let file = temp.as_file_mut();
-    file.write_all(bytes)?;
-    Ok(temp.keep()?)
-}
- */
 
 /// given a list of regex patterns for test cases, run all tests
 /// that match any of the patterns.
@@ -530,7 +456,7 @@ pub async fn test_provider() -> Provider {
         match load_provider().await {
             Ok(p) => p,
             Err(e) => {
-                panic!("failed to load provider: {}", e.to_string());
+                panic!("failed to load provider: {}", e);
             }
         }
     })
@@ -545,7 +471,21 @@ pub async fn load_provider() -> Result<Provider, Box<dyn std::error::Error>> {
     let prov = start_provider_test(conf).await?;
 
     // give it time to startup
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let delay_time_sec = match prov.config.get("start_delay_sec") {
+        Some(n) => {
+            let n = n.as_integer().unwrap_or(0);
+            if !(0..=60).contains(&n) {
+                return Err(RpcError::InvalidParameter(format!(
+                    "configuration value 'start_delay_sec' is too large: {}",
+                    n
+                ))
+                .into());
+            }
+            std::cmp::max(n as u64, DEFAULT_START_DELAY_SEC)
+        }
+        None => DEFAULT_START_DELAY_SEC,
+    };
+    tokio::time::sleep(std::time::Duration::from_secs(delay_time_sec)).await;
 
     let link_values = if let Some(toml::Value::Table(map)) = values {
         to_value_map(&map)?
@@ -553,5 +493,6 @@ pub async fn load_provider() -> Result<Provider, Box<dyn std::error::Error>> {
         SimpleValueMap::default()
     };
     prov.link_to_test(link_values).await?;
+
     Ok(prov)
 }
