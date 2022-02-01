@@ -5,14 +5,14 @@
 use crate::testing::TestResult;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use futures::{future::BoxFuture, Stream};
+use futures::future::BoxFuture;
 use serde::Serialize;
 use std::{fs, io::Write, ops::Deref, path::PathBuf, sync::Arc};
 use tokio::sync::OnceCell;
 use toml::value::Value as TomlValue;
 use wasmbus_rpc::{
+    anats,
     core::{HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition, WasmCloudEntity},
-    provider::ratsio::{ops::Message as NatsMessage, NatsClient, NatsSid},
     Context, Message, RpcError, RpcResult, SendOpts, Transport,
 };
 
@@ -52,8 +52,8 @@ pub struct ProviderProcess {
     pub path: PathBuf,
     pub proc: std::process::Child,
     pub config: TomlMap,
-    pub nats_client: Arc<NatsClient>,
-    pub rpc_client: wasmbus_rpc::RpcClient,
+    pub nats_client: anats::Connection,
+    pub rpc_client: wasmbus_rpc::rpc_client::RpcClient,
     pub timeout_ms: std::sync::Mutex<u64>,
 }
 
@@ -138,12 +138,11 @@ impl ProviderProcess {
     }
 
     /// subscribe to rpc messages from the provider using the established link
-    pub async fn subscribe_rpc(
-        &self,
-    ) -> RpcResult<(NatsSid, impl Stream<Item = NatsMessage> + Send + Sync)> {
-        let subject = wasmbus_rpc::rpc_topic(&self.origin(), &self.host_data.lattice_rpc_prefix);
+    pub async fn subscribe_rpc(&self) -> RpcResult<anats::Subscription> {
+        let subject =
+            wasmbus_rpc::rpc_client::rpc_topic(&self.origin(), &self.host_data.lattice_rpc_prefix);
         self.nats_client
-            .subscribe(subject)
+            .subscribe(&subject)
             .await
             .map_err(|e| wasmbus_rpc::RpcError::Nats(e.to_string()))
     }
@@ -222,6 +221,7 @@ impl Transport for Provider {
 
 impl Deref for Provider {
     type Target = ProviderProcess;
+
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
@@ -334,16 +334,15 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
     stdin.write_all(encoded.as_bytes())?;
 
     // Connect to nats
-    let nats_client = NatsClient::new(host_data.nats_options())
-        .await
-        .map_err(|e| {
-            anyhow!(
-                "nats connection to {} failed: {}",
-                &host_data.lattice_rpc_url,
-                e.to_string()
-            )
-        })?;
-    let client = wasmbus_rpc::RpcClient::new(
+    let nats_client = host_data.nats_connect().await.map_err(|e| {
+        anyhow!(
+            "nats connection to {} failed: {}",
+            &host_data.lattice_rpc_url,
+            e.to_string()
+        )
+    })?;
+
+    let client = wasmbus_rpc::rpc_client::RpcClient::new(
         nats_client.clone(),
         &host_data.lattice_rpc_prefix,
         keys,
