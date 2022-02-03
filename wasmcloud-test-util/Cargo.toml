@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-test-util"
-version = "0.1.9"
+version = "0.2.0"
 edition = "2021"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
@@ -10,8 +10,8 @@ repository = "https://github.com/wasmcloud/wasmcloud-test"
 readme = "README.md"
 
 [dependencies]
-wasmcloud-interface-testing = "0.2.1"
-wasmbus-rpc = "0.6.0"
+wasmcloud-interface-testing = "0.3"
+wasmbus-rpc = "0.7"
 regex = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -25,4 +25,4 @@ serde_json = "1.0"
 termcolor = "1.1"
 tokio = { version = "1", features = ["full"]}
 toml = "0.5"
-wascap = "0.6"
+wascap = "0.8"
