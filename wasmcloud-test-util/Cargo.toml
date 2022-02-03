@@ -10,8 +10,8 @@ repository = "https://github.com/wasmcloud/wasmcloud-test"
 readme = "README.md"
 
 [dependencies]
-wasmcloud-interface-testing = { path = "../../interfaces/testing/rust" }
-wasmbus-rpc = { path = "../../weld/rpc-rs" }
+wasmcloud-interface-testing = "0.3"
+wasmbus-rpc = "0.7"
 regex = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
