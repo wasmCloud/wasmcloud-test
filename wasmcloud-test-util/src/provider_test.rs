@@ -280,12 +280,11 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
     // set logging level for capability provider with the "RUST_LOG" environment variable,
     // default level is "info"
     let log_level = match config.get("rust_log") {
-        Some(TomlValue::String(level)) if level.parse::<log::Level>().is_ok() => level.to_string(),
-        None => "info".to_string(),
-        Some(x) => {
-            eprintln!("invalid 'rust_log' setting '{}', using 'info'", x);
-            "info".to_string()
+        Some(TomlValue::String(level)) => {
+            eprintln!("Setting provider logging level to {}", &level);
+            level.to_string()
         }
+        _ => "info".to_string(),
     };
     // set RUST_BACKTRACE, if requested
     // default is disabled
