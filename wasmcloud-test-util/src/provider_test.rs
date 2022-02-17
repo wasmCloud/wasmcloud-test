@@ -12,8 +12,9 @@ use tokio::sync::OnceCell;
 use toml::value::Value as TomlValue;
 use wasmbus_rpc::{
     anats,
+    common::{Context, Message, SendOpts, Transport},
     core::{HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition, WasmCloudEntity},
-    Context, Message, RpcError, RpcResult, SendOpts, Transport,
+    error::{RpcError, RpcResult},
 };
 
 pub type SimpleValueMap = std::collections::HashMap<String, String>;
@@ -319,6 +320,7 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
 
     // provider's stdout is piped through our stdout
     let mut child_proc = std::process::Command::new(&exe_path)
+        .stdout(std::process::Stdio::piped())
         .stdin(std::process::Stdio::piped())
         .env("RUST_LOG", &log_level)
         .env("RUST_BACKTRACE", enable_backtrace)
