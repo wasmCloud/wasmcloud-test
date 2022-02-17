@@ -10,7 +10,7 @@ repository = "https://github.com/wasmcloud/wasmcloud-test"
 readme = "README.md"
 
 [dependencies]
-wasmcloud-interface-testing = {version = "0.3.1", path="../../interfaces/testing/rust"}
+wasmcloud-interface-testing = "0.3.1"
 wasmbus-rpc = "0.7.5"
 regex = "1"
 
