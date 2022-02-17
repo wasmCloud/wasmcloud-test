@@ -12,8 +12,9 @@ use tokio::sync::OnceCell;
 use toml::value::Value as TomlValue;
 use wasmbus_rpc::{
     anats,
+    common::{Context, Message, SendOpts, Transport},
     core::{HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition, WasmCloudEntity},
-    Context, Message, RpcError, RpcResult, SendOpts, Transport,
+    error::{RpcError, RpcResult},
 };
 
 pub type SimpleValueMap = std::collections::HashMap<String, String>;
@@ -280,12 +281,11 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
     // set logging level for capability provider with the "RUST_LOG" environment variable,
     // default level is "info"
     let log_level = match config.get("rust_log") {
-        Some(TomlValue::String(level)) if level.parse::<log::Level>().is_ok() => level.to_string(),
-        None => "info".to_string(),
-        Some(x) => {
-            eprintln!("invalid 'rust_log' setting '{}', using 'info'", x);
-            "info".to_string()
+        Some(TomlValue::String(level)) => {
+            eprintln!("Setting provider logging level to {}", &level);
+            level.to_string()
         }
+        _ => "info".to_string(),
     };
     // set RUST_BACKTRACE, if requested
     // default is disabled
@@ -320,6 +320,7 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
 
     // provider's stdout is piped through our stdout
     let mut child_proc = std::process::Command::new(&exe_path)
+        .stdout(std::process::Stdio::piped())
         .stdin(std::process::Stdio::piped())
         .env("RUST_LOG", &log_level)
         .env("RUST_BACKTRACE", enable_backtrace)
