@@ -6,6 +6,7 @@ pub mod cli;
 
 // re-export testing interface
 pub use wasmcloud_interface_testing as testing;
+
 // re-export regex
 pub use regex;
 
@@ -14,17 +15,24 @@ pub use regex;
 /// check that the two expressions are equal, returning RpcError if they are not
 #[macro_export]
 macro_rules! check_eq {
-    ($left:expr, $right:expr $(,)?) => ({
+    ($left:expr, $right:expr $(,)?) => {{
         match (&$left, &$right) {
             (left_val, right_val) => {
                 if (left_val == right_val) {
                     Ok(true)
                 } else {
-                    Err(format!("check failed: `check_eq(left, right)`\n  left: `{:?}`\n right: `{:?}` {}:{}", $left, $right, std::file!(), std::line!{}))
+                    Err(format!(
+                        "check failed: `check_eq(left, right)`\n  left: `{:?}`\n right: `{:?}` \
+                         {}:{}",
+                        $left,
+                        $right,
+                        std::file!(),
+                        std::line! {}
+                    ))
                 }
             }
         }
-    });
+    }};
 }
 
 /// check that the condition is true, returning RpcError if it is false
@@ -64,11 +72,11 @@ macro_rules! run_selected {
             let re = match $crate::regex::Regex::new(pattern) {
                 Ok(re) => re,
                 Err(e) => {
-                    let error = wasmbus_rpc::RpcError::Other(format!(
+                    let error = RpcError::Other(format!(
                         "invalid regex spec '{}' for test case: {}",
                         pattern, e
                     ));
-                    results.push(("TestCase", Err::<(),wasmbus_rpc::RpcError>(error)).into());
+                    results.push(("TestCase", Err::<(),RpcError>(error)).into());
                     break;
                 }
             };
