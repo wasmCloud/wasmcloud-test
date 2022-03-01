@@ -302,23 +302,21 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
     };
 
     let keys = wascap::prelude::KeyPair::new_user();
-    let host_data = HostData {
-        host_id: "_TEST_".to_string(),
-        lattice_rpc_prefix: config
-            .get("lattice_rpc_prefix")
-            .and_then(|v| v.as_str())
-            .unwrap_or(TEST_LATTICE_PREFIX)
-            .to_string(),
-        lattice_rpc_url: nats_url(&config),
-        link_name: config
-            .get("link_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("default")
-            .to_string(),
-        provider_key: pubkey,
-        cluster_issuers: vec![keys.public_key()],
-        ..Default::default()
-    };
+    let mut host_data = HostData::default();
+    host_data.host_id = "_TEST_".to_string();
+    host_data.lattice_rpc_prefix = config
+        .get("lattice_rpc_prefix")
+        .and_then(|v| v.as_str())
+        .unwrap_or(TEST_LATTICE_PREFIX)
+        .to_string();
+    host_data.lattice_rpc_url = nats_url(&config);
+    host_data.link_name = config
+        .get("link_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .to_string();
+    host_data.provider_key = pubkey;
+    host_data.cluster_issuers = vec![keys.public_key()];
     let buf = serde_json::to_vec(&host_data)?;
     let mut encoded = base64::encode_config(&buf, base64::STANDARD_NO_PAD);
     encoded.push_str("\r\n");

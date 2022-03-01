@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-test-util"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
@@ -10,8 +10,8 @@ repository = "https://github.com/wasmcloud/wasmcloud-test"
 readme = "README.md"
 
 [dependencies]
-wasmcloud-interface-testing = { version = "0.4.0", path = "../../interfaces/testing/rust" }
-wasmbus-rpc = { version = "0.8.0", path = "../../weld/rpc-rs" }
+wasmcloud-interface-testing = "0.4.1"
+wasmbus-rpc = "0.8.2"
 regex = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
