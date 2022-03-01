@@ -15,6 +15,7 @@ use wasmbus_rpc::{
     common::{Context, Message, SendOpts, Transport},
     core::{HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition, WasmCloudEntity},
     error::{RpcError, RpcResult},
+    rpc_client::RpcClient,
 };
 
 pub type SimpleValueMap = std::collections::HashMap<String, String>;
@@ -54,7 +55,7 @@ pub struct ProviderProcess {
     pub proc: std::process::Child,
     pub config: TomlMap,
     pub nats_client: anats::Connection,
-    pub rpc_client: wasmbus_rpc::rpc_client::RpcClient,
+    pub rpc_client: RpcClient,
     pub timeout_ms: std::sync::Mutex<u64>,
 }
 
@@ -145,7 +146,7 @@ impl ProviderProcess {
         self.nats_client
             .subscribe(&subject)
             .await
-            .map_err(|e| wasmbus_rpc::RpcError::Nats(e.to_string()))
+            .map_err(|e| RpcError::Nats(e.to_string()))
     }
 
     /// send a control message to the provider:put link, get link, or shutdown
@@ -177,6 +178,7 @@ impl ProviderProcess {
             &self.host_data.provider_key
         );
         self.rpc_client.publish(&shutdown_topic, b"").await?;
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         Ok(())
     }
 
@@ -246,8 +248,11 @@ pub fn load_config() -> Result<TomlMap, anyhow::Error> {
     };
     let data = if !path.is_file() {
         Err(anyhow!(
-                "Missing configuration file '{}'. Config file should be 'provider_test_config.toml' in the current directory, or a .toml file whose path is in the environment variable 'PROVIDER_TEST_CONFIG'", &path.display())
-            )
+            "Missing configuration file '{}'. Config file should be 'provider_test_config.toml' \
+             in the current directory, or a .toml file whose path is in the environment variable \
+             'PROVIDER_TEST_CONFIG'",
+            &path.display()
+        ))
     } else {
         fs::read_to_string(&path)
             .map_err(|e| anyhow!("failed reading config from {}: {}", &path.display(), e))
@@ -297,23 +302,21 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
     };
 
     let keys = wascap::prelude::KeyPair::new_user();
-    let host_data = HostData {
-        host_id: "_TEST_".to_string(),
-        lattice_rpc_prefix: config
-            .get("lattice_rpc_prefix")
-            .and_then(|v| v.as_str())
-            .unwrap_or(TEST_LATTICE_PREFIX)
-            .to_string(),
-        lattice_rpc_url: nats_url(&config),
-        link_name: config
-            .get("link_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("default")
-            .to_string(),
-        provider_key: pubkey,
-        cluster_issuers: vec![keys.public_key()],
-        ..Default::default()
-    };
+    let mut host_data = HostData::default();
+    host_data.host_id = "_TEST_".to_string();
+    host_data.lattice_rpc_prefix = config
+        .get("lattice_rpc_prefix")
+        .and_then(|v| v.as_str())
+        .unwrap_or(TEST_LATTICE_PREFIX)
+        .to_string();
+    host_data.lattice_rpc_url = nats_url(&config);
+    host_data.link_name = config
+        .get("link_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .to_string();
+    host_data.provider_key = pubkey;
+    host_data.cluster_issuers = vec![keys.public_key()];
     let buf = serde_json::to_vec(&host_data)?;
     let mut encoded = base64::encode_config(&buf, base64::STANDARD_NO_PAD);
     encoded.push_str("\r\n");
@@ -342,8 +345,9 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
             e.to_string()
         )
     })?;
+    wasmbus_rpc::provider::init_host_bridge_for_test(nats_client.clone(), &host_data)?;
 
-    let client = wasmbus_rpc::rpc_client::RpcClient::new(
+    let client = RpcClient::new(
         nats_client.clone(),
         &host_data.lattice_rpc_prefix,
         keys,
@@ -389,11 +393,11 @@ macro_rules! run_selected_spawn {
             let re = match $crate::regex::Regex::new(pattern) {
                 Ok(re) => re,
                 Err(e) => {
-                    let error = wasmbus_rpc::RpcError::Other(format!(
+                    let error = RpcError::Other(format!(
                         "invalid regex spec '{}' for test case: {}",
                         pattern, e
                     ));
-                    results.push(("TestCase", Err::<(),wasmbus_rpc::RpcError>(error)).into());
+                    results.push(("TestCase", Err::<(),RpcError>(error)).into());
                     break;
                 }
             };
@@ -409,8 +413,8 @@ macro_rules! run_selected_spawn {
                     ).await;
                     let tr:TestResult = match join {
                         Ok(res) => (name, res).into(),
-                        Err(e) => (name, Err::<(),wasmbus_rpc::RpcError>(
-                            wasmbus_rpc::RpcError::Other(format!("join error: {}", e.to_string()))
+                        Err(e) => (name, Err::<(),RpcError>(
+                            RpcError::Other(format!("join error: {}", e.to_string()))
                         )).into()
                     };
                     results.push(tr);
@@ -492,7 +496,24 @@ pub async fn load_provider() -> Result<Provider, Box<dyn std::error::Error>> {
     } else {
         SimpleValueMap::default()
     };
+
     prov.link_to_test(link_values).await?;
+
+    // optionally, allow extra time to handle put_link
+    if let Some(n) = prov.config.get("link_delay_sec") {
+        if let Some(n) = n.as_integer() {
+            if n > 0 {
+                eprintln!("Pausing {} secs after put_link", n);
+                tokio::time::sleep(std::time::Duration::from_secs(n as u64)).await;
+            }
+        } else {
+            return Err(RpcError::InvalidParameter(format!(
+                "configuration value 'link_delay_sec={}' is not a valid integer",
+                n
+            ))
+            .into());
+        }
+    }
 
     Ok(prov)
 }
