@@ -6,7 +6,6 @@ use crate::testing::TestResult;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
-use serde::Serialize;
 use std::{fs, io::Write, ops::Deref, path::PathBuf, sync::Arc};
 use tokio::sync::OnceCell;
 use toml::value::Value as TomlValue;
@@ -32,8 +31,23 @@ const TEST_HOST_ID: &str = "NwasmCloudTestProvider000000000000000000000000000000
 static ONCE: OnceCell<Provider> = OnceCell::const_new();
 pub type TestFunc = fn() -> BoxFuture<'static, RpcResult<()>>;
 
-fn to_value_map<T: Serialize>(data: &T) -> RpcResult<SimpleValueMap> {
+fn to_value_map(data: &toml::map::Map<String, TomlValue>) -> RpcResult<SimpleValueMap> {
     let mut map = SimpleValueMap::default();
+    // copy simple values into the map
+    for (k, v) in data.iter() {
+        match v {
+            TomlValue::Integer(_) | TomlValue::Float(_) | TomlValue::Boolean(_) => {
+                map.insert(k.clone(), v.to_string());
+            }
+            // string is handled separately because 'to_string()' adds quotes
+            TomlValue::String(s) => {
+                map.insert(k.clone(), s.clone());
+            }
+            // intentionally omitted
+            TomlValue::Array(_) | TomlValue::Table(_) | TomlValue::Datetime(_) => {}
+        };
+    }
+    // copy the entire map as base64-encoded json with value "config_b64"
     let json = serde_json::to_string(data)
         .map_err(|e| RpcError::Ser(format!("invalid 'values' map: {}", e)))?;
     let b64 = base64::encode_config(&json, base64::STANDARD_NO_PAD);
@@ -445,7 +459,7 @@ pub async fn run_tests(
     let mut results: Vec<TestResult> = Vec::new();
     let handle = tokio::runtime::Handle::current();
     for t in tests.into_iter() {
-        let rc: RpcResult<()> = handle.spawn((&t.1)()).await?;
+        let rc: RpcResult<()> = handle.spawn((t.1)()).await?;
         results.push((t.0, rc).into());
     }
 

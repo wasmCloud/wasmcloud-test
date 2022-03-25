@@ -55,5 +55,5 @@ pub fn print_test_results(results: &[TestResult]) {
     writeln!(&mut stdout, "{}/{} Passed", passed, total).unwrap();
     // Reset the color settings back to what the user configured
     let _ = stdout.set_color(&ColorSpec::new());
-    writeln!(&mut stdout, "").unwrap();
+    writeln!(&mut stdout).unwrap();
 }
