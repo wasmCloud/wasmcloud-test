@@ -472,9 +472,8 @@ pub async fn load_provider() -> Result<Provider, RpcError> {
     };
     let exe_path = conf
         .get("bin_path")
-        .map(|v| v.as_str())
-        .flatten()
-        .map(|s| PathBuf::from(s))
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
         .ok_or_else(|| {
             RpcError::ProviderInit("Must specifiy binary path in 'bin_path' in config file".into())
         })?;
@@ -503,8 +502,7 @@ pub async fn load_provider() -> Result<Provider, RpcError> {
                 return Err(RpcError::InvalidParameter(format!(
                     "configuration value 'start_delay_sec' is too large: {}",
                     n
-                ))
-                .into());
+                )));
             }
             std::cmp::max(n as u64, DEFAULT_START_DELAY_SEC)
         }
@@ -523,8 +521,7 @@ pub async fn load_provider() -> Result<Provider, RpcError> {
             return Err(RpcError::InvalidParameter(format!(
                 "configuration value 'link_delay_sec={}' is not a valid integer",
                 n
-            ))
-            .into());
+            )));
         }
     }
 
