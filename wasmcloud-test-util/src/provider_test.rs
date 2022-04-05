@@ -26,6 +26,8 @@ const DEFAULT_RPC_TIMEOUT_MILLIS: u64 = 2000;
 const DEFAULT_NATS_URL: &str = "127.0.0.1:4222";
 // use a unique lattice prefix to separate test traffic
 const TEST_LATTICE_PREFIX: &str = "TEST";
+// TODO: review/update how these two IDs are used.
+// - actor ID should begin with 'M' and host id should begin with 'N'.
 const TEST_ACTOR_HOST_ID: &str = "_TEST_";
 const TEST_HOST_ID: &str = "NwasmCloudTestProvider0000000000000000000000000000000000";
 
