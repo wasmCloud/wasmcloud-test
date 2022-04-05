@@ -26,6 +26,9 @@ const DEFAULT_RPC_TIMEOUT_MILLIS: u64 = 2000;
 const DEFAULT_NATS_URL: &str = "127.0.0.1:4222";
 // use a unique lattice prefix to separate test traffic
 const TEST_LATTICE_PREFIX: &str = "TEST";
+// TODO: review/update how these two IDs are used.
+// - actor ID should begin with 'M' and host id should begin with 'N'.
+const TEST_ACTOR_HOST_ID: &str = "_TEST_";
 const TEST_HOST_ID: &str = "NwasmCloudTestProvider0000000000000000000000000000000000";
 
 static ONCE: OnceCell<Provider> = OnceCell::const_new();
@@ -91,33 +94,6 @@ impl ProviderProcess {
             link_name: self.host_data.link_name.clone(),
             public_key: self.host_data.provider_key.clone(),
         }
-    }
-
-    /// link the test to the provider
-    pub async fn link_to_test(&self, values: SimpleValueMap) -> Result<(), anyhow::Error> {
-        let topic = format!(
-            "wasmbus.rpc.{}.{}.{}.linkdefs.put",
-            &self.host_data.lattice_rpc_prefix,
-            &self.host_data.provider_key,
-            &self.host_data.link_name,
-        );
-        let origin = self.origin();
-        let ld = LinkDefinition {
-            actor_id: origin.public_key.clone(),
-            contract_id: self
-                .config
-                .get("contract_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("wasmcloud:example")
-                .to_string(),
-            link_name: self.host_data.link_name.clone(),
-            provider_id: self.host_data.provider_key.clone(),
-            values,
-        };
-        let bytes = serde_json::to_vec(&ld)?;
-        self.rpc_client.publish(&topic, &bytes).await?;
-
-        Ok(())
     }
 
     /// send a health check
@@ -254,29 +230,34 @@ pub(crate) fn nats_url(config: &TomlMap) -> String {
 
 /// load toml configuration. looks for environment variable "PROVIDER_TEST_CONFIG",
 /// otherwise loads defaults.
-pub fn load_config() -> Result<TomlMap, anyhow::Error> {
+pub fn load_config() -> Result<TomlMap, RpcError> {
     let path = if let Ok(path) = std::env::var("PROVIDER_TEST_CONFIG") {
         PathBuf::from(path)
     } else {
         PathBuf::from("./provider_test_config.toml")
     };
     let data = if !path.is_file() {
-        Err(anyhow!(
+        Err(RpcError::ProviderInit(format!(
             "Missing configuration file '{}'. Config file should be 'provider_test_config.toml' \
              in the current directory, or a .toml file whose path is in the environment variable \
              'PROVIDER_TEST_CONFIG'",
             &path.display()
-        ))
+        )))
     } else {
-        fs::read_to_string(&path)
-            .map_err(|e| anyhow!("failed reading config from {}: {}", &path.display(), e))
+        fs::read_to_string(&path).map_err(|e| {
+            RpcError::ProviderInit(format!(
+                "failed reading config from {}: {}",
+                &path.display(),
+                e
+            ))
+        })
     }?;
     let map = toml::from_str(&data).map_err(|e| {
-        anyhow!(
+        RpcError::ProviderInit(format!(
             "parse error in configuration file loaded from {}: {}",
             &path.display(),
             e
-        )
+        ))
     })?;
     Ok(map)
 }
@@ -285,17 +266,12 @@ pub fn load_config() -> Result<TomlMap, anyhow::Error> {
 /// Configuration file path should be in the environment variable PROVIDER_TEST_CONFIG
 /// Par file path should be either in the environment variable PROVIDER_TEST_PAR
 /// or in the config file as "par_file"
-pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Error> {
-    let exe_path = match config.get("bin_path") {
-        Some(TomlValue::String(name)) => PathBuf::from(name),
-        _ => {
-            return Err(anyhow!(
-                "Must specifiy binary path in 'bin_path' in config file"
-            ))
-        }
-    };
-    let pubkey = format!("_PubKey_{}", &exe_path.display());
-    let exe_file = fs::File::open(&exe_path)?;
+pub async fn start_provider_test(
+    config: TomlMap,
+    exe_path: &std::path::Path,
+    ld: LinkDefinition,
+) -> Result<Provider, RpcError> {
+    let exe_file = fs::File::open(exe_path)?;
 
     // set logging level for capability provider with the "RUST_LOG" environment variable,
     // default level is "info"
@@ -306,6 +282,7 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
         }
         _ => "info".to_string(),
     };
+
     // set RUST_BACKTRACE, if requested
     // default is disabled
     let enable_backtrace = match config.get("rust_backtrace") {
@@ -317,21 +294,26 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
 
     let keys = wascap::prelude::KeyPair::new_user();
     let mut host_data = HostData::default();
-    host_data.host_id = "_TEST_".to_string();
+    host_data.host_id = ld.actor_id.clone();
     host_data.lattice_rpc_prefix = config
         .get("lattice_rpc_prefix")
         .and_then(|v| v.as_str())
         .unwrap_or(TEST_LATTICE_PREFIX)
         .to_string();
     host_data.lattice_rpc_url = nats_url(&config);
-    host_data.link_name = config
-        .get("link_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default")
-        .to_string();
-    host_data.provider_key = pubkey;
+    host_data.link_name = ld.link_name.clone();
+    host_data.provider_key = ld.provider_id.clone();
     host_data.cluster_issuers = vec![keys.public_key()];
-    let buf = serde_json::to_vec(&host_data)?;
+    host_data.link_definitions = vec![ld];
+    //lattice_rpc_user_jwt: "".to_string(),
+    //invocation_seed: "".to_string(),
+    //env_values: Default::default(),
+    //config_json: None,
+    //default_rpc_timeout_ms: None,
+    //lattice_rpc_user_seed: "".to_string(),
+    //instance_id: "".to_string(),
+
+    let buf = serde_json::to_vec(&host_data).map_err(|e| RpcError::Ser(e.to_string()))?;
     let mut encoded = base64::encode_config(&buf, base64::STANDARD_NO_PAD);
     encoded.push_str("\r\n");
 
@@ -342,23 +324,23 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
         .env("RUST_LOG", &log_level)
         .env("RUST_BACKTRACE", enable_backtrace)
         .spawn()
-        .map_err(|e| anyhow!("launching provider bin at {}: {}", &exe_path.display(), e))?;
+        .map_err(|e| {
+            RpcError::Other(format!(
+                "launching provider bin at {}: {}",
+                &exe_path.display(),
+                e
+            ))
+        })?;
 
     let mut stdin = child_proc
         .stdin
         .take()
-        .ok_or_else(|| anyhow!("failed to open child stdin"))?;
+        .ok_or_else(|| RpcError::ProviderInit("failed to open child stdin".into()))?;
 
     stdin.write_all(encoded.as_bytes())?;
 
     // Connect to nats
-    let nats_client = host_data.nats_connect().await.map_err(|e| {
-        anyhow!(
-            "nats connection to {} failed: {}",
-            &host_data.lattice_rpc_url,
-            e.to_string()
-        )
-    })?;
+    let nats_client = host_data.nats_connect().await?;
     wasmbus_rpc::provider::init_host_bridge_for_test(nats_client.clone(), &host_data)?;
 
     let client = RpcClient::new(
@@ -372,7 +354,7 @@ pub async fn start_provider_test(config: TomlMap) -> Result<Provider, anyhow::Er
     Ok(Provider {
         inner: Arc::new(ProviderProcess {
             file: exe_file,
-            path: exe_path,
+            path: exe_path.to_owned(),
             proc: child_proc,
             host_data,
             config,
@@ -482,11 +464,37 @@ pub async fn test_provider() -> Provider {
     .clone()
 }
 
-pub async fn load_provider() -> Result<Provider, Box<dyn std::error::Error>> {
+pub async fn load_provider() -> Result<Provider, RpcError> {
     let mut conf = load_config()?;
     let values = conf.remove("values");
-
-    let prov = start_provider_test(conf).await?;
+    let link_values = if let Some(toml::Value::Table(map)) = values {
+        to_value_map(&map)?
+    } else {
+        SimpleValueMap::default()
+    };
+    let exe_path = conf
+        .get("bin_path")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            RpcError::ProviderInit("Must specifiy binary path in 'bin_path' in config file".into())
+        })?;
+    let test_linkdef = LinkDefinition {
+        actor_id: TEST_ACTOR_HOST_ID.to_string(),
+        contract_id: conf
+            .get("contract_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("wasmcloud:example")
+            .to_string(),
+        link_name: conf
+            .get("link_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default")
+            .to_string(),
+        provider_id: format!("_PubKey_{}", &exe_path.display()),
+        values: link_values,
+    };
+    let prov = start_provider_test(conf, &exe_path, test_linkdef.clone()).await?;
 
     // give it time to startup
     let delay_time_sec = match prov.config.get("start_delay_sec") {
@@ -496,22 +504,13 @@ pub async fn load_provider() -> Result<Provider, Box<dyn std::error::Error>> {
                 return Err(RpcError::InvalidParameter(format!(
                     "configuration value 'start_delay_sec' is too large: {}",
                     n
-                ))
-                .into());
+                )));
             }
             std::cmp::max(n as u64, DEFAULT_START_DELAY_SEC)
         }
         None => DEFAULT_START_DELAY_SEC,
     };
     tokio::time::sleep(std::time::Duration::from_secs(delay_time_sec)).await;
-
-    let link_values = if let Some(toml::Value::Table(map)) = values {
-        to_value_map(&map)?
-    } else {
-        SimpleValueMap::default()
-    };
-
-    prov.link_to_test(link_values).await?;
 
     // optionally, allow extra time to handle put_link
     if let Some(n) = prov.config.get("link_delay_sec") {
@@ -524,8 +523,7 @@ pub async fn load_provider() -> Result<Provider, Box<dyn std::error::Error>> {
             return Err(RpcError::InvalidParameter(format!(
                 "configuration value 'link_delay_sec={}' is not a valid integer",
                 n
-            ))
-            .into());
+            )));
         }
     }
 
