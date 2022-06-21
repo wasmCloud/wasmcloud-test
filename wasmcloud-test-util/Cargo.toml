@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-test-util"
-version = "0.3.4"
+version = "0.4.0-alpha-1.0" # was 0.3.3
 edition = "2021"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
@@ -10,15 +10,15 @@ repository = "https://github.com/wasmcloud/wasmcloud-test"
 readme = "README.md"
 
 [dependencies]
-wasmcloud-interface-testing = { path = "../../interfaces/testing/rust" }
-wasmbus-rpc = { git = "https://github.com/wasmcloud/weld", rev = "7a6522e5333e72a423d3aaac89f5060514d0d333", features = ["otel"] }
+wasmcloud-interface-testing = { git = "https://github.com/wasmcloud/interfaces", rev = "8c39d40ea70fef6985a5d67510cc33319c15b8f8" }
+wasmbus-rpc = { git = "https://github.com/wasmcloud/weld", rev = "d9c4dd571925c66462c196134a66f799a2e4c7fc" }
 
 regex = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
-async-nats = "0.14.0"
+async-nats = "0.15.0"
 futures = "0.3"
 base64 = "0.13"
 log = "0.4"
