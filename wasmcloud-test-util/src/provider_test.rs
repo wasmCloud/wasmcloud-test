@@ -321,13 +321,6 @@ pub async fn start_provider_test(
     host_data.provider_key = ld.provider_id.clone();
     host_data.cluster_issuers = vec![my_key.public_key()];
     host_data.link_definitions = vec![ld];
-    //lattice_rpc_user_jwt: "".to_string(),
-    //invocation_seed: "".to_string(),
-    //env_values: Default::default(),
-    //config_json: None,
-    //default_rpc_timeout_ms: None,
-    //lattice_rpc_user_seed: "".to_string(),
-    //instance_id: "".to_string(),
 
     let buf = serde_json::to_vec(&host_data).map_err(|e| RpcError::Ser(e.to_string()))?;
     let mut encoded = base64::encode_config(&buf, base64::STANDARD_NO_PAD);
