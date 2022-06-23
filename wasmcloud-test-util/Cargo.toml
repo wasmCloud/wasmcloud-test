@@ -10,8 +10,8 @@ repository = "https://github.com/wasmcloud/wasmcloud-test"
 readme = "README.md"
 
 [dependencies]
-wasmcloud-interface-testing = { git = "https://github.com/wasmcloud/interfaces", rev = "7b8fe081e8e94530a1c571348ab37e6650420878" }
-wasmbus-rpc = { git = "https://github.com/wasmcloud/weld", rev = "3029ca06bae2c08237563e39988988a32ceee01d" }
+wasmcloud-interface-testing = { git = "https://github.com/wasmcloud/interfaces", rev = "d4d6b2af443246f09f2201ba502b87cc1389bb6f" }
+wasmbus-rpc = { git = "https://github.com/wasmcloud/weld", rev = "249102567eb50fddaf3a35c2546afbdb321e8b16" }
 
 regex = "1"
 
