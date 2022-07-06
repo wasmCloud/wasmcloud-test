@@ -10,11 +10,11 @@ use std::{fs, io::Write, ops::Deref, path::PathBuf, sync::Arc};
 use tokio::sync::OnceCell;
 use toml::value::Value as TomlValue;
 use wasmbus_rpc::{
-    anats,
     common::{Context, Message, SendOpts, Transport},
     core::{HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition, WasmCloudEntity},
     error::{RpcError, RpcResult},
     rpc_client::RpcClient,
+    wascap::prelude::KeyPair,
 };
 
 pub type SimpleValueMap = std::collections::HashMap<String, String>;
@@ -71,7 +71,7 @@ pub struct ProviderProcess {
     pub path: PathBuf,
     pub proc: std::process::Child,
     pub config: TomlMap,
-    pub nats_client: anats::Connection,
+    pub nats_client: async_nats::Client,
     pub rpc_client: RpcClient,
     pub timeout_ms: std::sync::Mutex<u64>,
 }
@@ -96,6 +96,32 @@ impl ProviderProcess {
         }
     }
 
+    /// link the test to the provider
+    pub async fn link_to_test(&self, values: SimpleValueMap) -> Result<(), anyhow::Error> {
+        let topic = format!(
+            "wasmbus.rpc.{}.{}.{}.linkdefs.put",
+            &self.host_data.lattice_rpc_prefix,
+            &self.host_data.provider_key,
+            &self.host_data.link_name,
+        );
+        let origin = self.origin();
+        let mut ld = LinkDefinition::default();
+        ld.actor_id = origin.public_key.clone();
+        ld.contract_id = self
+            .config
+            .get("contract_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("wasmcloud:example")
+            .to_string();
+        ld.link_name = self.host_data.link_name.clone();
+        ld.provider_id = self.host_data.provider_key.clone();
+        ld.values = values;
+        let bytes = serde_json::to_vec(&ld)?;
+        self.rpc_client.publish(topic, bytes).await?;
+
+        Ok(())
+    }
+
     /// send a health check
     pub async fn health_check(&self) -> Result<(), anyhow::Error> {
         let topic = format!(
@@ -117,8 +143,12 @@ impl ProviderProcess {
     pub async fn send_rpc(&self, message: Message<'_>) -> RpcResult<Vec<u8>> {
         match self
             .rpc_client
-            //.send_timeout(self.origin(), self.target(), message, std::time::Duration::from_millis(self.get_timeout_ms()))
-            .send(self.origin(), self.target(), message)
+            .send(
+                self.origin(),
+                self.target(),
+                &self.host_data.lattice_rpc_prefix,
+                message,
+            )
             .await
         {
             Err(e) => {
@@ -130,11 +160,11 @@ impl ProviderProcess {
     }
 
     /// subscribe to rpc messages from the provider using the established link
-    pub async fn subscribe_rpc(&self) -> RpcResult<anats::Subscription> {
+    pub async fn subscribe_rpc(&self) -> RpcResult<async_nats::Subscriber> {
         let subject =
             wasmbus_rpc::rpc_client::rpc_topic(&self.origin(), &self.host_data.lattice_rpc_prefix);
         self.nats_client
-            .subscribe(&subject)
+            .subscribe(subject)
             .await
             .map_err(|e| RpcError::Nats(e.to_string()))
     }
@@ -150,7 +180,7 @@ impl ProviderProcess {
         Resp: serde::de::DeserializeOwned,
     {
         let bytes = serde_json::to_vec(&data)?;
-        let resp_bytes = self.rpc_client.request(topic, &bytes).await?;
+        let resp_bytes = self.rpc_client.request(topic.to_string(), bytes).await?;
         let resp = serde_json::from_slice::<Resp>(&resp_bytes)?;
         Ok(resp)
     }
@@ -167,24 +197,10 @@ impl ProviderProcess {
             "Sending shutdown to provider {}",
             &self.host_data.provider_key
         );
-        self.rpc_client.publish(&shutdown_topic, b"").await?;
+        self.rpc_client.publish(shutdown_topic, Vec::new()).await?;
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         Ok(())
     }
-
-    /*
-    fn get_timeout_ms(&self) -> u64 {
-        let lock = self.timeout_ms.try_lock();
-        if let Ok(rg) = lock {
-            *rg
-        } else {
-            // only if mutex was poisioned, which would only happen
-            // if somebody paniced while holding this mutex.
-            // but test threads stop after a panic, so this should never happen
-            DEFAULT_RPC_TIMEOUT_MILLIS
-        }
-    }
-     */
 }
 
 #[async_trait]
@@ -292,7 +308,7 @@ pub async fn start_provider_test(
         _ => "0",
     };
 
-    let keys = wascap::prelude::KeyPair::new_user();
+    let my_key = KeyPair::new_user();
     let mut host_data = HostData::default();
     host_data.host_id = ld.actor_id.clone();
     host_data.lattice_rpc_prefix = config
@@ -303,15 +319,8 @@ pub async fn start_provider_test(
     host_data.lattice_rpc_url = nats_url(&config);
     host_data.link_name = ld.link_name.clone();
     host_data.provider_key = ld.provider_id.clone();
-    host_data.cluster_issuers = vec![keys.public_key()];
+    host_data.cluster_issuers = vec![my_key.public_key()];
     host_data.link_definitions = vec![ld];
-    //lattice_rpc_user_jwt: "".to_string(),
-    //invocation_seed: "".to_string(),
-    //env_values: Default::default(),
-    //config_json: None,
-    //default_rpc_timeout_ms: None,
-    //lattice_rpc_user_seed: "".to_string(),
-    //instance_id: "".to_string(),
 
     let buf = serde_json::to_vec(&host_data).map_err(|e| RpcError::Ser(e.to_string()))?;
     let mut encoded = base64::encode_config(&buf, base64::STANDARD_NO_PAD);
@@ -345,10 +354,11 @@ pub async fn start_provider_test(
 
     let client = RpcClient::new(
         nats_client.clone(),
-        &host_data.lattice_rpc_prefix,
-        keys,
         TEST_HOST_ID.to_string(),
-        None,
+        Some(std::time::Duration::from_millis(
+            host_data.default_rpc_timeout_ms.unwrap_or(2000),
+        )),
+        Arc::new(my_key),
     );
 
     Ok(Provider {
@@ -440,9 +450,13 @@ pub async fn run_tests(
 ) -> std::result::Result<Vec<TestResult>, Box<dyn std::error::Error>> {
     let mut results: Vec<TestResult> = Vec::new();
     let handle = tokio::runtime::Handle::current();
-    for t in tests.into_iter() {
-        let rc: RpcResult<()> = handle.spawn((t.1)()).await?;
-        results.push((t.0, rc).into());
+    for (name, tfunc) in tests.into_iter() {
+        let rc: RpcResult<()> = handle.spawn(tfunc()).await?;
+        results.push(TestResult {
+            name: name.to_string(),
+            passed: rc.is_ok(),
+            ..Default::default()
+        });
     }
 
     let provider = test_provider().await;
@@ -479,21 +493,20 @@ pub async fn load_provider() -> Result<Provider, RpcError> {
         .ok_or_else(|| {
             RpcError::ProviderInit("Must specifiy binary path in 'bin_path' in config file".into())
         })?;
-    let test_linkdef = LinkDefinition {
-        actor_id: TEST_ACTOR_HOST_ID.to_string(),
-        contract_id: conf
-            .get("contract_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("wasmcloud:example")
-            .to_string(),
-        link_name: conf
-            .get("link_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("default")
-            .to_string(),
-        provider_id: format!("_PubKey_{}", &exe_path.display()),
-        values: link_values,
-    };
+    let mut test_linkdef = LinkDefinition::default();
+    test_linkdef.actor_id = TEST_ACTOR_HOST_ID.to_string();
+    test_linkdef.contract_id = conf
+        .get("contract_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("wasmcloud:example")
+        .to_string();
+    test_linkdef.link_name = conf
+        .get("link_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .to_string();
+    test_linkdef.provider_id = format!("_PubKey_{}", &exe_path.display());
+    test_linkdef.values = link_values;
     let prov = start_provider_test(conf, &exe_path, test_linkdef.clone()).await?;
 
     // give it time to startup
