@@ -327,7 +327,7 @@ pub async fn start_provider_test(
     encoded.push_str("\r\n");
 
     // provider's stdout is piped through our stdout
-    let mut child_proc = std::process::Command::new(&exe_path)
+    let mut child_proc = std::process::Command::new(exe_path)
         .stdout(std::process::Stdio::piped())
         .stdin(std::process::Stdio::piped())
         .env("RUST_LOG", &log_level)
