@@ -6,6 +6,7 @@ use crate::testing::TestResult;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
+use nkeys::{KeyPair, KeyPairType};
 use std::{fs, io::Write, ops::Deref, path::PathBuf, sync::Arc};
 use tokio::sync::OnceCell;
 use toml::value::Value as TomlValue;
@@ -14,7 +15,6 @@ use wasmbus_rpc::{
     core::{HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition, WasmCloudEntity},
     error::{RpcError, RpcResult},
     rpc_client::RpcClient,
-    wascap::prelude::KeyPair,
 };
 
 pub type SimpleValueMap = std::collections::HashMap<String, String>;
@@ -26,10 +26,7 @@ const DEFAULT_RPC_TIMEOUT_MILLIS: u64 = 2000;
 const DEFAULT_NATS_URL: &str = "127.0.0.1:4222";
 // use a unique lattice prefix to separate test traffic
 const TEST_LATTICE_PREFIX: &str = "TEST";
-// TODO: review/update how these two IDs are used.
-// - actor ID should begin with 'M' and host id should begin with 'N'.
-const TEST_ACTOR_HOST_ID: &str = "_TEST_";
-const TEST_HOST_ID: &str = "NwasmCloudTestProvider0000000000000000000000000000000000";
+const TEST_HOST_ID: &str = "_TEST_";
 
 static ONCE: OnceCell<Provider> = OnceCell::const_new();
 pub type TestFunc = fn() -> BoxFuture<'static, RpcResult<()>>;
@@ -58,16 +55,18 @@ fn to_value_map(data: &toml::map::Map<String, TomlValue>) -> RpcResult<SimpleVal
     Ok(map)
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Provider {
     inner: Arc<ProviderProcess>,
 }
 
 /// info needed to test a capability provider process. If this structure goes out of scope,
 /// the provider will exit
+#[derive(Debug)]
 pub struct ProviderProcess {
     pub file: std::fs::File,
     pub host_data: HostData,
+    pub actor_id: String,
     pub path: PathBuf,
     pub proc: std::process::Child,
     pub config: TomlMap,
@@ -83,7 +82,7 @@ impl ProviderProcess {
         WasmCloudEntity {
             contract_id: "".to_string(),
             link_name: "".to_string(),
-            public_key: self.host_data.host_id.to_string(),
+            public_key: self.actor_id.clone(),
         }
     }
 
@@ -104,9 +103,8 @@ impl ProviderProcess {
             &self.host_data.provider_key,
             &self.host_data.link_name,
         );
-        let origin = self.origin();
         let mut ld = LinkDefinition::default();
-        ld.actor_id = origin.public_key.clone();
+        ld.actor_id = self.actor_id.clone();
         ld.contract_id = self
             .config
             .get("contract_id")
@@ -288,16 +286,19 @@ pub async fn start_provider_test(
     ld: LinkDefinition,
 ) -> Result<Provider, RpcError> {
     let exe_file = fs::File::open(exe_path)?;
+    // generate a fake host key, which we will use for cluster issuer and host id
+    let host_key = KeyPair::new(KeyPairType::Server);
+    eprintln!("host_id:     {}", host_key.public_key());
+    eprintln!("contract_id: {}", &ld.contract_id);
+    let actor_id = ld.actor_id.clone();
 
     // set logging level for capability provider with the "RUST_LOG" environment variable,
     // default level is "info"
     let log_level = match config.get("rust_log") {
-        Some(TomlValue::String(level)) => {
-            eprintln!("Setting provider logging level to {}", &level);
-            level.to_string()
-        }
+        Some(TomlValue::String(level)) => level.to_string(),
         _ => "info".to_string(),
     };
+    eprintln!("log_level:   {}", &log_level);
 
     // set RUST_BACKTRACE, if requested
     // default is disabled
@@ -308,19 +309,20 @@ pub async fn start_provider_test(
         _ => "0",
     };
 
-    let my_key = KeyPair::new_user();
     let mut host_data = HostData::default();
-    host_data.host_id = ld.actor_id.clone();
+    host_data.host_id = TEST_HOST_ID.to_string(); // host_key.public_key();
     host_data.lattice_rpc_prefix = config
         .get("lattice_rpc_prefix")
         .and_then(|v| v.as_str())
         .unwrap_or(TEST_LATTICE_PREFIX)
         .to_string();
-    host_data.lattice_rpc_url = nats_url(&config);
     host_data.link_name = ld.link_name.clone();
+    host_data.lattice_rpc_url = nats_url(&config);
     host_data.provider_key = ld.provider_id.clone();
-    host_data.cluster_issuers = vec![my_key.public_key()];
+    host_data.invocation_seed = host_key.seed().unwrap();
+    host_data.cluster_issuers = vec![host_key.public_key()];
     host_data.link_definitions = vec![ld];
+    host_data.structured_logging = false;
 
     let buf = serde_json::to_vec(&host_data).map_err(|e| RpcError::Ser(e.to_string()))?;
     let mut encoded = base64::encode_config(&buf, base64::STANDARD_NO_PAD);
@@ -352,24 +354,23 @@ pub async fn start_provider_test(
     let nats_client = host_data.nats_connect().await?;
     wasmbus_rpc::provider::init_host_bridge_for_test(nats_client.clone(), &host_data)?;
 
-    let client = RpcClient::new(
-        nats_client.clone(),
-        TEST_HOST_ID.to_string(),
-        Some(std::time::Duration::from_millis(
-            host_data.default_rpc_timeout_ms.unwrap_or(2000),
-        )),
-        Arc::new(my_key),
-    );
-
     Ok(Provider {
         inner: Arc::new(ProviderProcess {
             file: exe_file,
             path: exe_path.to_owned(),
             proc: child_proc,
-            host_data,
+            actor_id,
             config,
-            nats_client,
-            rpc_client: client,
+            nats_client: nats_client.clone(),
+            rpc_client: RpcClient::new(
+                nats_client,
+                host_key.public_key(),
+                Some(std::time::Duration::from_millis(
+                    host_data.default_rpc_timeout_ms.unwrap_or(2000),
+                )),
+                Arc::new(host_key),
+            ),
+            host_data,
             timeout_ms: std::sync::Mutex::new(DEFAULT_RPC_TIMEOUT_MILLIS),
         }),
     })
@@ -493,8 +494,13 @@ pub async fn load_provider() -> Result<Provider, RpcError> {
         .ok_or_else(|| {
             RpcError::ProviderInit("Must specifiy binary path in 'bin_path' in config file".into())
         })?;
+    let actor_kp = KeyPair::new(KeyPairType::Module);
+    eprintln!("actor_id:    {}", actor_kp.public_key());
+    let provider_kp = KeyPair::new(KeyPairType::Service);
+    eprintln!("provider_id: {}", provider_kp.public_key());
+
     let mut test_linkdef = LinkDefinition::default();
-    test_linkdef.actor_id = TEST_ACTOR_HOST_ID.to_string();
+    test_linkdef.actor_id = actor_kp.public_key();
     test_linkdef.contract_id = conf
         .get("contract_id")
         .and_then(|v| v.as_str())
@@ -505,7 +511,7 @@ pub async fn load_provider() -> Result<Provider, RpcError> {
         .and_then(|v| v.as_str())
         .unwrap_or("default")
         .to_string();
-    test_linkdef.provider_id = format!("_PubKey_{}", &exe_path.display());
+    test_linkdef.provider_id = provider_kp.public_key();
     test_linkdef.values = link_values;
     let prov = start_provider_test(conf, &exe_path, test_linkdef.clone()).await?;
 

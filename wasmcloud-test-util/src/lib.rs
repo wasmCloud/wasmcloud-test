@@ -7,8 +7,9 @@ pub mod cli;
 // re-export testing interface
 pub use wasmcloud_interface_testing as testing;
 
-// re-export regex
+// re-export regex and nkeys
 pub use regex;
+pub use nkeys;
 
 // these macros are supported on all build targets (wasm32 et. al.)
 
