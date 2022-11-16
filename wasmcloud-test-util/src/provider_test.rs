@@ -7,6 +7,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use nkeys::{KeyPair, KeyPairType};
+use serde::Serialize;
 use std::{fs, io::Write, ops::Deref, path::PathBuf, sync::Arc};
 use tokio::sync::OnceCell;
 use toml::value::Value as TomlValue;
@@ -58,6 +59,12 @@ fn to_value_map(data: &toml::map::Map<String, TomlValue>) -> RpcResult<SimpleVal
 #[derive(Clone, Debug)]
 pub struct Provider {
     inner: Arc<ProviderProcess>,
+}
+
+#[derive(Serialize)]
+struct ShutdownMessage {
+    /// The ID of the host that sent the message
+    pub host_id: String,
 }
 
 /// info needed to test a capability provider process. If this structure goes out of scope,
@@ -195,7 +202,14 @@ impl ProviderProcess {
             "Sending shutdown to provider {}",
             &self.host_data.provider_key
         );
-        self.rpc_client.publish(shutdown_topic, Vec::new()).await?;
+        let message = serde_json::to_vec(&ShutdownMessage {
+            host_id: TEST_HOST_ID.to_string(),
+        })
+        .unwrap();
+        let resp = self.rpc_client.request(shutdown_topic, message).await?;
+        if !resp.is_empty() {
+            eprintln!("shutdown response: {}", String::from_utf8_lossy(&resp));
+        }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         Ok(())
     }
