@@ -14,6 +14,8 @@ use nkeys::{KeyPair, KeyPairType};
 use serde::{de, Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
+    env::var,
+    error::Error,
     fs,
     io::Write,
     ops::Deref,
@@ -32,8 +34,8 @@ use wasmbus_rpc::{
 
 pub type TestFunc = fn() -> BoxFuture<'static, RpcResult<()>>;
 
-pub type SimpleValueMap = std::collections::HashMap<String, String>;
-pub type TomlMap = std::collections::BTreeMap<String, toml::Value>;
+pub type SimpleValueMap = HashMap<String, String>;
+pub type TomlMap = BTreeMap<String, toml::Value>;
 pub type JsonMap = serde_json::Map<String, serde_json::Value>;
 
 const DEFAULT_START_DELAY: Duration = Duration::from_secs(1);
@@ -130,7 +132,7 @@ impl Config {
     /// Loads [Config] from path contained in environment variable `PROVIDER_TEST_CONFIG`,
     /// otherwise attempts to use `provider_test_config.toml` in working directory.
     pub fn load() -> Result<Self, RpcError> {
-        let path = if let Ok(path) = std::env::var("PROVIDER_TEST_CONFIG") {
+        let path = if let Ok(path) = var("PROVIDER_TEST_CONFIG") {
             PathBuf::from(path)
         } else {
             PathBuf::from("./provider_test_config.toml")
@@ -311,7 +313,7 @@ impl ProviderProcess {
         if !resp.is_empty() {
             eprintln!("shutdown response: {}", String::from_utf8_lossy(&resp));
         }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
         Ok(())
     }
 }
@@ -323,13 +325,13 @@ impl Transport for Provider {
         _ctx: &Context,
         message: Message<'_>,
         _opts: Option<SendOpts>,
-    ) -> std::result::Result<Vec<u8>, RpcError> {
+    ) -> Result<Vec<u8>, RpcError> {
         self.inner.send_rpc(message).await
     }
 
     /// sets the time period for an expected response to rpc messages,
     /// after which an RpcError::Timeout will occur.
-    fn set_timeout(&self, interval: std::time::Duration) {
+    fn set_timeout(&self, interval: Duration) {
         let lock = self.timeout_ms.try_lock();
         if let Ok(mut rg) = lock {
             *rg = interval.as_millis()
@@ -512,7 +514,7 @@ pub struct TestCase {
 // calls that fail.
 pub async fn run_tests(
     tests: impl IntoIterator<Item = TestCase>,
-) -> std::result::Result<Vec<TestResult>, Box<dyn std::error::Error>> {
+) -> Result<Vec<TestResult>, Box<dyn Error>> {
     let mut results: Vec<TestResult> = Vec::new();
     let handle = tokio::runtime::Handle::current();
     for TestCase {
