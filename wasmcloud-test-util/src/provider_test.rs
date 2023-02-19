@@ -34,9 +34,6 @@ use wasmbus_rpc::{
 
 pub type TestFunc = fn() -> BoxFuture<'static, RpcResult<()>>;
 
-pub type TomlMap = BTreeMap<String, toml::Value>;
-pub type JsonMap = serde_json::Map<String, serde_json::Value>;
-
 const DEFAULT_START_DELAY: Duration = Duration::from_secs(1);
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_millis(2000);
 const DEFAULT_NATS_URL: &str = "127.0.0.1:4222";
