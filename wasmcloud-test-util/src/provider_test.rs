@@ -34,7 +34,6 @@ use wasmbus_rpc::{
 
 pub type TestFunc = fn() -> BoxFuture<'static, RpcResult<()>>;
 
-pub type SimpleValueMap = HashMap<String, String>;
 pub type TomlMap = BTreeMap<String, toml::Value>;
 pub type JsonMap = serde_json::Map<String, serde_json::Value>;
 
@@ -211,7 +210,7 @@ impl ProviderProcess {
     }
 
     /// link the test to the provider
-    pub async fn link_to_test(&self, values: SimpleValueMap) -> Result<(), anyhow::Error> {
+    pub async fn link_to_test(&self, values: impl IntoIterator<Item = (String, String)>) -> Result<(), anyhow::Error> {
         let topic = format!(
             "wasmbus.rpc.{}.{}.{}.linkdefs.put",
             &self.host_data.lattice_rpc_prefix,
@@ -223,7 +222,7 @@ impl ProviderProcess {
         ld.contract_id = self.config.contract_id.clone();
         ld.link_name = self.host_data.link_name.clone();
         ld.provider_id = self.host_data.provider_key.clone();
-        ld.values = values;
+        ld.values = values.into_iter().collect();
         let bytes = serde_json::to_vec(&ld)?;
         self.rpc_client.publish(topic, bytes).await?;
 
