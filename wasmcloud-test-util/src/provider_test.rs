@@ -2,7 +2,6 @@
 //!
 //! simple test harness to load a capability provider and test it
 //!
-use crate::testing::TestResult;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -83,6 +82,11 @@ pub struct ProviderProcess {
 }
 
 impl ProviderProcess {
+    /// Returns the nats topic used by a mock actor
+    pub fn mock_actor_rpc_topic(&self) -> String {
+        wasmbus_rpc::rpc_client::rpc_topic(&self.origin(), &self.host_data.lattice_rpc_prefix)
+    }
+
     /// generate the `origin` field for an Invocation. To the receiving provider,
     /// the origin field looks like an actor
     pub fn origin(&self) -> WasmCloudEntity {
@@ -404,7 +408,7 @@ macro_rules! run_selected_spawn {
         let handle = tokio::runtime::Handle::current();
         let all_tests = vec![".*".to_string()];
         let pats : &Vec<String> = $opt.patterns.as_ref();
-        let mut results: Vec<TestResult> = Vec::new();
+        let mut results = Vec::new();
 
         // Each test case regex (pats) is checked against all test names (tname).
         // This would be simpler to use a RegexSet, but then the tests would
@@ -432,7 +436,7 @@ macro_rules! run_selected_spawn {
                         $tname(&opts).await
                         }
                     ).await;
-                    let tr:TestResult = match join {
+                    let tr: testing::TestResult = match join {
                         Ok(res) => (name, res).into(),
                         Err(e) => (name, Err::<(),RpcError>(
                             RpcError::Other(format!("join error: {}", e.to_string()))
@@ -462,12 +466,12 @@ macro_rules! run_selected_spawn {
 // calls that fail.
 pub async fn run_tests(
     tests: Vec<(&'static str, TestFunc)>,
-) -> std::result::Result<Vec<TestResult>, Box<dyn std::error::Error>> {
-    let mut results: Vec<TestResult> = Vec::new();
+) -> std::result::Result<Vec<crate::testing::TestResult>, Box<dyn std::error::Error>> {
+    let mut results = Vec::new();
     let handle = tokio::runtime::Handle::current();
     for (name, tfunc) in tests.into_iter() {
         let rc: RpcResult<()> = handle.spawn(tfunc()).await?;
-        results.push(TestResult {
+        results.push(crate::testing::TestResult {
             name: name.to_string(),
             passed: rc.is_ok(),
             ..Default::default()
