@@ -1,9 +1,9 @@
 //! cli utilities
 use std::io::Write;
 
+use crate::testing::TestResult;
 use serde::Deserialize;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
-use wasmcloud_interface_testing::TestResult;
 
 // structure for deserializing error results
 #[derive(Deserialize)]
