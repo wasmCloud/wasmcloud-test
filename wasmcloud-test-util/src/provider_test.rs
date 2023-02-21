@@ -2,12 +2,21 @@
 //!
 //! simple test harness to load a capability provider and test it
 //!
+use crate::testing::TestResult;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use nkeys::{KeyPair, KeyPairType};
 use serde::Serialize;
-use std::{fs, io::Write, ops::Deref, path::PathBuf, sync::Arc};
+use std::{
+    fs,
+    io::Write,
+    ops::Deref,
+    path::{Path, PathBuf},
+    process,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::sync::OnceCell;
 use toml::value::Value as TomlValue;
 use wasmbus_rpc::{
@@ -50,7 +59,7 @@ fn to_value_map(data: &toml::map::Map<String, TomlValue>) -> RpcResult<SimpleVal
     // copy the entire map as base64-encoded json with value "config_b64"
     let json = serde_json::to_string(data)
         .map_err(|e| RpcError::Ser(format!("invalid 'values' map: {}", e)))?;
-    let b64 = base64::encode_config(&json, base64::STANDARD_NO_PAD);
+    let b64 = base64::encode_config(json, base64::STANDARD_NO_PAD);
     map.insert("config_b64".to_string(), b64);
     Ok(map)
 }
@@ -70,15 +79,15 @@ struct ShutdownMessage {
 /// the provider will exit
 #[derive(Debug)]
 pub struct ProviderProcess {
-    pub file: std::fs::File,
+    pub file: fs::File,
     pub host_data: HostData,
     pub actor_id: String,
     pub path: PathBuf,
-    pub proc: std::process::Child,
+    pub proc: process::Child,
     pub config: TomlMap,
     pub nats_client: async_nats::Client,
     pub rpc_client: RpcClient,
-    pub timeout_ms: std::sync::Mutex<u64>,
+    pub timeout_ms: Mutex<u64>,
 }
 
 impl ProviderProcess {
@@ -214,7 +223,7 @@ impl ProviderProcess {
         if !resp.is_empty() {
             eprintln!("shutdown response: {}", String::from_utf8_lossy(&resp));
         }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
         Ok(())
     }
 }
@@ -226,13 +235,13 @@ impl Transport for Provider {
         _ctx: &Context,
         message: Message<'_>,
         _opts: Option<SendOpts>,
-    ) -> std::result::Result<Vec<u8>, RpcError> {
+    ) -> Result<Vec<u8>, RpcError> {
         self.inner.send_rpc(message).await
     }
 
     /// sets the time period for an expected response to rpc messages,
     /// after which an RpcError::Timeout will occur.
-    fn set_timeout(&self, interval: std::time::Duration) {
+    fn set_timeout(&self, interval: Duration) {
         let lock = self.timeout_ms.try_lock();
         if let Ok(mut rg) = lock {
             *rg = interval.as_millis() as u64
@@ -300,7 +309,7 @@ pub fn load_config() -> Result<TomlMap, RpcError> {
 /// or in the config file as "par_file"
 pub async fn start_provider_test(
     config: TomlMap,
-    exe_path: &std::path::Path,
+    exe_path: &Path,
     ld: LinkDefinition,
 ) -> Result<Provider, RpcError> {
     let exe_file = fs::File::open(exe_path)?;
@@ -347,9 +356,9 @@ pub async fn start_provider_test(
     encoded.push_str("\r\n");
 
     // provider's stdout is piped through our stdout
-    let mut child_proc = std::process::Command::new(exe_path)
-        .stdout(std::process::Stdio::piped())
-        .stdin(std::process::Stdio::piped())
+    let mut child_proc = process::Command::new(exe_path)
+        .stdout(process::Stdio::piped())
+        .stdin(process::Stdio::piped())
         .env("RUST_LOG", &log_level)
         .env("RUST_BACKTRACE", enable_backtrace)
         .spawn()
@@ -383,13 +392,13 @@ pub async fn start_provider_test(
             rpc_client: RpcClient::new(
                 nats_client,
                 host_key.public_key(),
-                Some(std::time::Duration::from_millis(
+                Some(Duration::from_millis(
                     host_data.default_rpc_timeout_ms.unwrap_or(2000),
                 )),
                 Arc::new(host_key),
             ),
             host_data,
-            timeout_ms: std::sync::Mutex::new(DEFAULT_RPC_TIMEOUT_MILLIS),
+            timeout_ms: Mutex::new(DEFAULT_RPC_TIMEOUT_MILLIS),
         }),
     })
 }
@@ -401,6 +410,7 @@ pub async fn start_provider_test(
 /// This is like the `run_selected!` macro, except that it spawns
 /// a thread for running the test case, so it can handle panics
 /// (and failed assertions, which panic).
+/// Users of this macro must have a the testing interface package in scope by using `use wasmcloud_test_util::testing`;
 #[macro_export]
 macro_rules! run_selected_spawn {
     ( $opt:expr, $($tname:ident),* $(,)? ) => {{
@@ -464,14 +474,15 @@ macro_rules! run_selected_spawn {
 // all test cases in the current thread (async executor).
 // The reason I had put the spawn in was to catch panics from assert
 // calls that fail.
+/// Users of this macro must have a the testing interface package in scope by using `use wasmcloud_test_util::testing`;
 pub async fn run_tests(
     tests: Vec<(&'static str, TestFunc)>,
-) -> std::result::Result<Vec<crate::testing::TestResult>, Box<dyn std::error::Error>> {
+) -> Result<Vec<TestResult>, Box<dyn std::error::Error>> {
     let mut results = Vec::new();
     let handle = tokio::runtime::Handle::current();
     for (name, tfunc) in tests.into_iter() {
         let rc: RpcResult<()> = handle.spawn(tfunc()).await?;
-        results.push(crate::testing::TestResult {
+        results.push(TestResult {
             name: name.to_string(),
             passed: rc.is_ok(),
             ..Default::default()
@@ -547,14 +558,14 @@ pub async fn load_provider() -> Result<Provider, RpcError> {
         }
         None => DEFAULT_START_DELAY_SEC,
     };
-    tokio::time::sleep(std::time::Duration::from_secs(delay_time_sec)).await;
+    tokio::time::sleep(Duration::from_secs(delay_time_sec)).await;
 
     // optionally, allow extra time to handle put_link
     if let Some(n) = prov.config.get("link_delay_sec") {
         if let Some(n) = n.as_integer() {
             if n > 0 {
                 eprintln!("Pausing {} secs after put_link", n);
-                tokio::time::sleep(std::time::Duration::from_secs(n as u64)).await;
+                tokio::time::sleep(Duration::from_secs(n as u64)).await;
             }
         } else {
             return Err(RpcError::InvalidParameter(format!(
