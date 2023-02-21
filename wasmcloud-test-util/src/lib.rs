@@ -8,7 +8,6 @@ pub mod cli;
 pub use nkeys;
 pub use regex;
 
-#[allow(dead_code)]
 pub mod testing {
 
     smithy_bindgen::smithy_bindgen!("testing/testing.smithy", "org.wasmcloud.interface.testing");
