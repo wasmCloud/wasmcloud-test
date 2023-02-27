@@ -29,10 +29,9 @@ pub mod testing {
 
     // convert empty RpcResult into a testResult
     impl<'name, T: Serialize> From<NamedResult<'name, T>> for TestResult {
-        fn from(name_res: NamedResult<'name, T>) -> TestResult {
-            let test_case_name = name_res.0.to_string();
-            let test_case_result = name_res.1;
-            match test_case_result {
+        fn from((name, res): NamedResult<'name, T>) -> TestResult {
+            let name = name.into();
+            match res {
                 Ok(res) => {
                     // test passed. Serialize the data to json
                     let data = match serde_json::to_vec(&res) {
@@ -46,7 +45,7 @@ pub mod testing {
                         Err(_) => b"".to_vec(),
                     };
                     TestResult {
-                        name: test_case_name,
+                        name,
                         passed: true,
                         snap_data: Some(data),
                     }
@@ -60,7 +59,7 @@ pub mod testing {
                     ))
                     .ok();
                     TestResult {
-                        name: test_case_name,
+                        name,
                         passed: false,
                         snap_data: data,
                     }
