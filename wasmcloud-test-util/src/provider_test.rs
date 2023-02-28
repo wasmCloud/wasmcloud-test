@@ -5,6 +5,7 @@
 use crate::testing::TestResult;
 use anyhow::anyhow;
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD_NO_PAD, engine::Engine};
 use futures::future::BoxFuture;
 use nkeys::{KeyPair, KeyPairType};
 use serde::Serialize;
@@ -20,6 +21,7 @@ use std::{
 use tokio::sync::OnceCell;
 use toml::value::Value as TomlValue;
 use wasmbus_rpc::{
+    async_nats,
     common::{Context, Message, SendOpts, Transport},
     core::{HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition, WasmCloudEntity},
     error::{RpcError, RpcResult},
@@ -59,7 +61,7 @@ fn to_value_map(data: &toml::map::Map<String, TomlValue>) -> RpcResult<SimpleVal
     // copy the entire map as base64-encoded json with value "config_b64"
     let json = serde_json::to_string(data)
         .map_err(|e| RpcError::Ser(format!("invalid 'values' map: {}", e)))?;
-    let b64 = base64::encode_config(json, base64::STANDARD_NO_PAD);
+    let b64 = STANDARD_NO_PAD.encode(json);
     map.insert("config_b64".to_string(), b64);
     Ok(map)
 }
@@ -352,7 +354,7 @@ pub async fn start_provider_test(
     host_data.structured_logging = false;
 
     let buf = serde_json::to_vec(&host_data).map_err(|e| RpcError::Ser(e.to_string()))?;
-    let mut encoded = base64::encode_config(&buf, base64::STANDARD_NO_PAD);
+    let mut encoded = STANDARD_NO_PAD.encode(&buf);
     encoded.push_str("\r\n");
 
     // provider's stdout is piped through our stdout
