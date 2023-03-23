@@ -448,7 +448,7 @@ macro_rules! run_selected_spawn {
                         $tname(&opts).await
                         }
                     ).await;
-                    let tr: testing::TestResult = match join {
+                    let tr: wasmcloud_test_util::testing::TestResult = match join {
                         Ok(res) => (name, res).into(),
                         Err(e) => (name, Err::<(),RpcError>(
                             RpcError::Other(format!("join error: {}", e.to_string()))
