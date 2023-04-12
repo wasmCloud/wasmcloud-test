@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-test-util"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
@@ -11,9 +11,9 @@ readme = "README.md"
 
 [dependencies]
 smithy-bindgen = "0.1.0"
-wasmbus-rpc = { version = "0.12", features = [ "otel" ] }
 serde_bytes = "0.11"
 regex = "1"
+wasmbus-rpc = { version = "0.13", features = ["otel"]}
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 anyhow = "1.0"
