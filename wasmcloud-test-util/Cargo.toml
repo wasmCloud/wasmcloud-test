@@ -13,6 +13,8 @@ readme = "README.md"
 smithy-bindgen = "0.1.0"
 serde_bytes = "0.11"
 regex = "1"
+# TODO: wasmbus-rpc must be upgraded to a version that uses nkeys@v0.3.0
+# this can only be done after https://github.com/wasmCloud/weld/pull/155 merges and is released
 wasmbus-rpc = { version = "0.13", features = ["otel"]}
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -21,7 +23,7 @@ async-trait = "0.1"
 futures = "0.3"
 base64 = "0.21"
 log = "0.4"
-nkeys = "0.2.0"
+nkeys = "0.3.0"
 serde = { version = "1.0", features=["derive"]}
 serde_json = "1.0"
 termcolor = "1.1"

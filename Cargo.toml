@@ -1,3 +1,18 @@
 [workspace]
 members = [ "wasmcloud-test-util"]
 
+[patch.crates-io]
+## NOTE(2023/06/06): We'd like to use nkeys v0.3.0, but we cannot due to a version conflict with nkeys 0.2.0
+##
+## Patching nkeys here is required because async-nats (transitive dep, via wasmbus-rpc)
+## uses nkeys 0.2.0 which is distinct from nkeys 0.3.0
+##
+## We must patch nkeys (transitively) here, otherwise async-nats' nkeys@v0.2.0 will leak into the downstream wash crate.
+##
+## Note that we can't use the 'version' specifier because rust will complain about the patch pointing to the
+## same source as what's on crates.io (even if you specify version 0.2.0 in wasmcloud-test-util/Cargo.toml)
+## v0.3.0 *is* what's on crates.io, so it's not wrong, but we still want patch to apply to the transitive dep
+##
+## This can all be removed once all wasmbus-rpc & async-nats are on is on a newr  version
+##
+nkeys = { git = 'https://github.com/wasmcloud/nkeys.git', rev = "bf3a664" } # v0.3.0 as of 2023/06/06
