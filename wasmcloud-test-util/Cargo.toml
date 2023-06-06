@@ -15,7 +15,9 @@ serde_bytes = "0.11"
 regex = "1"
 # TODO: wasmbus-rpc must be upgraded to a version that uses nkeys@v0.3.0
 # this can only be done after https://github.com/wasmCloud/weld/pull/155 merges and is released
-wasmbus-rpc = { version = "0.13", features = ["otel"]}
+#wasmbus-rpc = { version = "0.13", features = ["otel"]}
+#wasmbus-rpc = { path = "../../forks/weld/rpc-rs", features = ["otel"] } # { version = "0.13", features = ["otel"]}
+wasmbus-rpc = { git = 'https://github.com/wasmCloud/weld.git', rev = "9968326", features = ["otel"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 anyhow = "1.0"
