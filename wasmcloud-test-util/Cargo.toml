@@ -10,10 +10,10 @@ repository = "https://github.com/wasmcloud/wasmcloud-test"
 readme = "README.md"
 
 [dependencies]
-smithy-bindgen = "0.1.0"
 serde_bytes = "0.11"
 regex = "1"
 wasmbus-rpc = { version = "0.14", features = ["otel"]}
+wasmcloud-interface-testing = "0.8.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 anyhow = "1.0"
